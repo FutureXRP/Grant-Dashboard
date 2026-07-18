@@ -86,6 +86,35 @@ const SCOUT_SYSTEM = `You grade federal funding opportunities for a small nonpro
 IMPORTANT Native-funding nuance: do NOT auto-reject Native-focused programs. Some — notably ACF's Administration for Native Americans (ANA: SEDS, language preservation, environmental) — accept "Native nonprofit organizations" serving Native communities, which this Native-led 501(c)(3) may qualify as. Grade those possible_fit or strong_fit with a note to verify the notice's exact eligibility list; reserve not_eligible for programs explicitly limited to federally recognized tribes, tribal governments, or Urban Indian Organizations.
 Each reason is ONE short sentence naming the decisive factor. Be honest: a morning report full of false positives wastes the team's time; a false "not_eligible" loses money — when the title alone cannot tell, use possible_fit and say what to check. The summary is 2-3 sentences: the morning's top picks by number and name, or "nothing new worth pursuing today".`;
 
+export type ScoutProgress = {
+  active: boolean;
+  step: number;
+  total: number;
+  label: string;
+  startedAt: string;
+};
+
+function writeProgress(p: ScoutProgress) {
+  db()
+    .prepare(`INSERT INTO settings (key, value) VALUES ('scout_progress', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
+    .run(JSON.stringify(p));
+}
+
+export function getProgress(): ScoutProgress | null {
+  const row = db().prepare(`SELECT value FROM settings WHERE key='scout_progress'`).get() as
+    | { value: string }
+    | undefined;
+  if (!row?.value) return null;
+  try {
+    const p = JSON.parse(row.value) as ScoutProgress;
+    // Ignore stale progress from a crashed run (>15 min old).
+    if (p.active && Date.now() - new Date(p.startedAt).getTime() > 15 * 60 * 1000) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
 const WATCH_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
@@ -161,7 +190,7 @@ export function toggleSource(id: number) {
   db().prepare(`UPDATE scout_sources SET enabled = 1 - enabled WHERE id=?`).run(id);
 }
 
-async function runWatch(errors: string[]): Promise<WatchResult> {
+async function runWatch(errors: string[], tick: (label: string) => void): Promise<WatchResult> {
   const d = db();
   const sources = d
     .prepare(`SELECT * FROM scout_sources WHERE enabled=1 ORDER BY kind, name`)
@@ -170,6 +199,7 @@ async function runWatch(errors: string[]): Promise<WatchResult> {
   const pages: { source: WatchSource & { last_hash: string }; text: string; changed: boolean }[] = [];
 
   for (const src of sources) {
+    tick(`Reading ${src.name}…`);
     try {
       const res = await fetch(src.url, {
         headers: { "User-Agent": "Mozilla/5.0 (GrantCopilot nonprofit grant scout)" },
@@ -196,6 +226,7 @@ async function runWatch(errors: string[]): Promise<WatchResult> {
   } else if (!aiConfigured()) {
     summary = "Pages fetched, but ANTHROPIC_API_KEY is not set — no extraction/grading.";
   } else {
+    tick("AI is reading the watched pages for opportunities…");
     try {
       const profile = d.prepare(`SELECT * FROM org_profile WHERE id=1`).get() as {
         name: string; legal_status: string; service_area: string; programs: string; populations: string;
@@ -294,7 +325,23 @@ export async function runScout(): Promise<ScoutReport> {
   const errors: string[] = [];
   const byNumber = new Map<string, ScoutHit>();
 
+  // Progress tracking: one step per keyword search, one per watched page,
+  // plus one for each of the two AI grading passes.
+  const sourceCount = (
+    d.prepare(`SELECT COUNT(*) n FROM scout_sources WHERE enabled=1`).get() as { n: number }
+  ).n;
+  const total = keywords.length + 1 + sourceCount + 1;
+  const startedAt = new Date().toISOString();
+  let step = 0;
+  const tick = (label: string) => {
+    step = Math.min(step + 1, total);
+    writeProgress({ active: true, step, total, label, startedAt });
+  };
+
+  try {
+
   for (const kw of keywords) {
+    tick(`Searching Grants.gov: “${kw}”…`);
     try {
       const results = await searchGrantsGov(kw);
       for (const r of results) {
@@ -325,6 +372,7 @@ export async function runScout(): Promise<ScoutReport> {
 
   let summary = "";
   let graded = false;
+  tick("AI is grading federal results against your profile…");
   if (aiConfigured() && hits.length > 0) {
     try {
       const profile = d.prepare(`SELECT * FROM org_profile WHERE id=1`).get() as {
@@ -379,7 +427,7 @@ export async function runScout(): Promise<ScoutReport> {
   );
 
   // State, foundation, and Native-funder page watch.
-  const watch = await runWatch(errors);
+  const watch = await runWatch(errors, tick);
 
   const report: ScoutReport = {
     ranAt: new Date().toISOString(),
@@ -398,6 +446,10 @@ export async function runScout(): Promise<ScoutReport> {
     `DELETE FROM scout_reports WHERE id NOT IN (SELECT id FROM scout_reports ORDER BY id DESC LIMIT 30)`
   ).run();
   return report;
+
+  } finally {
+    writeProgress({ active: false, step: total, total, label: "done", startedAt });
+  }
 }
 
 export function latestReport(): ScoutReport | null {

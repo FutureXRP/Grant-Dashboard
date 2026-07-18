@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import type { ScoutReport, ScoutHit, WatchSource } from "@/lib/scout";
+import type { ScoutReport, ScoutHit, WatchSource, ScoutProgress } from "@/lib/scout";
 
 const GRADE_STYLE: Record<string, string> = {
   strong_fit: "bg-green-100 text-green-800",
@@ -42,12 +42,31 @@ export default function ScoutPanel({
 }) {
   const [report, setReport] = useState<ScoutReport | null>(initialReport);
   const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<ScoutProgress | null>(null);
   const [error, setError] = useState("");
   const [hideUnlikely, setHideUnlikely] = useState(true);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
 
   async function run() {
     setRunning(true);
     setError("");
+    setProgress(null);
+    // Poll live progress while the run is in flight.
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch("/api/scout/progress");
+        const data = await res.json();
+        if (data.progress?.active) setProgress(data.progress);
+      } catch {
+        /* polling is best-effort */
+      }
+    }, 1200);
     try {
       const res = await fetch("/api/scout", { method: "POST" });
       const data = await res.json();
@@ -56,9 +75,16 @@ export default function ScoutPanel({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Scout run failed");
     } finally {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      setProgress(null);
       setRunning(false);
     }
   }
+
+  const pct = progress && progress.total > 0 ? Math.round((progress.step / progress.total) * 100) : 0;
 
   const visible: ScoutHit[] = (report?.hits ?? []).filter(
     (h) => !hideUnlikely || !h.grade || h.grade === "strong_fit" || h.grade === "possible_fit"
@@ -68,9 +94,12 @@ export default function ScoutPanel({
     <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
         <button className="btn" onClick={run} disabled={running}>
-          {running ? "Sweeping Grants.gov…" : "Run scout now"}
+          {running && (
+            <span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+          )}
+          {running ? "Scouting…" : "Run scout now"}
         </button>
-        {report && (
+        {!running && report && (
           <span className="text-xs text-gray-500">
             Last run {new Date(report.ranAt).toLocaleString()} — {report.totalFound} open opportunities,{" "}
             {report.newCount} new since last sweep
@@ -81,6 +110,34 @@ export default function ScoutPanel({
           hide unlikely / not-eligible
         </label>
       </div>
+      {running && (
+        <div className="card p-4 space-y-2">
+          <div className="flex items-center gap-3">
+            <span className="inline-block w-5 h-5 border-[3px] border-emerald-200 border-t-emerald-700 rounded-full animate-spin shrink-0" />
+            <div className="flex-1">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm font-medium">
+                  {progress?.label ?? "Starting the sweep…"}
+                </span>
+                <span className="text-sm font-bold text-emerald-700">
+                  {progress ? `${pct}%` : ""}
+                </span>
+              </div>
+              <div className="mt-1.5 h-2.5 w-full rounded-full bg-gray-100 overflow-hidden">
+                <div
+                  className="h-2.5 rounded-full bg-emerald-600 transition-all duration-700 ease-out"
+                  style={{ width: progress ? `${Math.max(3, pct)}%` : "3%" }}
+                />
+              </div>
+              {progress && (
+                <p className="text-xs text-gray-400 mt-1">
+                  Step {progress.step} of {progress.total} — federal sweep, page watch, then AI grading
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {error && <p className="text-sm text-red-600">{error}</p>}
       {report?.errors && report.errors.length > 0 && (
         <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 space-y-0.5">
