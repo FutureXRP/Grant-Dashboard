@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import type { ScoutReport, ScoutHit } from "@/lib/scout";
+import type { ScoutReport, ScoutHit, WatchSource } from "@/lib/scout";
 
 const GRADE_STYLE: Record<string, string> = {
   strong_fit: "bg-green-100 text-green-800",
@@ -17,14 +17,28 @@ const GRADE_LABEL: Record<string, string> = {
   not_eligible: "not eligible",
 };
 
+const KIND_LABEL: Record<string, string> = {
+  state: "Oklahoma state",
+  foundation: "Foundation",
+  native: "Native funders",
+};
+
 export default function ScoutPanel({
   initialReport,
   initialKeywords,
+  sources,
   saveKeywords,
+  addSource,
+  deleteSource,
+  toggleSource,
 }: {
   initialReport: ScoutReport | null;
   initialKeywords: string;
+  sources: WatchSource[];
   saveKeywords: (formData: FormData) => Promise<void>;
+  addSource: (formData: FormData) => Promise<void>;
+  deleteSource: (formData: FormData) => Promise<void>;
+  toggleSource: (formData: FormData) => Promise<void>;
 }) {
   const [report, setReport] = useState<ScoutReport | null>(initialReport);
   const [running, setRunning] = useState(false);
@@ -120,6 +134,125 @@ export default function ScoutPanel({
           ))}
         </div>
       )}
+
+      {/* State / foundation / Native watch results */}
+      {report?.watch && (
+        <div className="space-y-3">
+          <h2 className="font-bold text-lg">State, foundation & Native funder watch</h2>
+          {report.watch.summary && (
+            <div className="card p-4 bg-blue-50 border-blue-200">
+              <p className="text-sm">{report.watch.summary}</p>
+            </div>
+          )}
+          {report.watch.findings.length > 0 && (
+            <div className="card divide-y">
+              {report.watch.findings
+                .filter((f) => !hideUnlikely || !f.grade || f.grade === "strong_fit" || f.grade === "possible_fit")
+                .map((f, i) => (
+                  <div key={i} className="p-3 flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        {f.isNew && (
+                          <span className="shrink-0 rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px] font-bold">NEW</span>
+                        )}
+                        <a href={f.url || f.source_url} target="_blank" className="text-sm font-medium hover:underline truncate">
+                          {f.title}
+                        </a>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-0.5">
+                        {f.source}
+                        {f.deadline ? ` · deadline ${f.deadline}` : ""}
+                      </div>
+                      {f.details && <div className="text-xs text-gray-600 mt-0.5">{f.details}</div>}
+                      {f.reason && <div className="text-xs text-gray-600 mt-0.5 italic">{f.reason}</div>}
+                    </div>
+                    {f.grade && (
+                      <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[f.grade]}`}>
+                        {GRADE_LABEL[f.grade]}
+                      </span>
+                    )}
+                    <Link
+                      href={`/opportunities/new?title=${encodeURIComponent(f.title)}&agency=${encodeURIComponent(f.source)}&url=${encodeURIComponent(f.url || f.source_url)}`}
+                      className="btn-secondary text-xs shrink-0"
+                    >
+                      + Pipeline
+                    </Link>
+                  </div>
+                ))}
+            </div>
+          )}
+          <details className="card">
+            <summary className="cursor-pointer p-3 text-sm font-medium">
+              Watched pages status ({report.watch.sources.filter((s) => s.status === "ok").length}/{report.watch.sources.length} ok)
+            </summary>
+            <div className="px-4 pb-3 divide-y">
+              {report.watch.sources.map((s, i) => (
+                <div key={i} className="py-2 flex items-center gap-2 text-xs">
+                  <span className={`shrink-0 rounded px-1.5 py-0.5 font-bold ${s.status === "ok" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>
+                    {s.status === "ok" ? (s.changed ? "changed" : "ok") : "error"}
+                  </span>
+                  <span className="font-medium">{s.name}</span>
+                  {s.status !== "ok" && <span className="text-red-600">{s.status} — fix the URL below</span>}
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
+
+      {/* Watched sources manager */}
+      <details className="card">
+        <summary className="cursor-pointer p-3 text-sm font-medium">
+          Watched pages ({sources.filter((s) => s.enabled).length} active)
+        </summary>
+        <div className="px-4 pb-4 space-y-3">
+          <p className="text-xs text-gray-500">
+            The scout fetches each page every run, detects changes, and extracts + grades any funding opportunities on
+            it. The starter list covers Oklahoma agencies, the playbook&apos;s foundations, and Native funders — sites
+            reorganize, so re-point any source that errors. Add any grants page you want watched.
+          </p>
+          <div className="divide-y">
+            {sources.map((s) => (
+              <div key={s.id} className="py-2 flex items-center gap-2 text-sm">
+                <span className="text-[10px] text-gray-400 w-24 shrink-0">{KIND_LABEL[s.kind] ?? s.kind}</span>
+                <span className={`flex-1 min-w-0 truncate ${s.enabled ? "" : "text-gray-400 line-through"}`}>
+                  {s.name}{" "}
+                  <a href={s.url} target="_blank" className="text-gray-400 hover:underline text-xs">
+                    ↗
+                  </a>
+                </span>
+                <form action={toggleSource}>
+                  <input type="hidden" name="id" value={s.id} />
+                  <button className="btn-secondary text-xs">{s.enabled ? "disable" : "enable"}</button>
+                </form>
+                <form action={deleteSource}>
+                  <input type="hidden" name="id" value={s.id} />
+                  <button className="btn-secondary text-xs text-red-600">remove</button>
+                </form>
+              </div>
+            ))}
+          </div>
+          <form action={addSource} className="grid grid-cols-[1fr_2fr_auto_auto] gap-2 items-end">
+            <div>
+              <label className="label">Name</label>
+              <input name="name" required className="input" placeholder="Funder — grants page" />
+            </div>
+            <div>
+              <label className="label">URL</label>
+              <input name="url" required type="url" className="input" placeholder="https://…" />
+            </div>
+            <div>
+              <label className="label">Type</label>
+              <select name="kind" className="input">
+                <option value="state">state</option>
+                <option value="foundation">foundation</option>
+                <option value="native">native</option>
+              </select>
+            </div>
+            <button className="btn">Add</button>
+          </form>
+        </div>
+      </details>
 
       <details className="card">
         <summary className="cursor-pointer p-3 text-sm font-medium">Search keywords ({initialKeywords.split("\n").filter(Boolean).length})</summary>

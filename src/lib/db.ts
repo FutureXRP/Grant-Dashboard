@@ -123,6 +123,15 @@ function migrate(d: Database.Database) {
     created_at TEXT DEFAULT (datetime('now')),
     report TEXT DEFAULT '{}'
   );
+  CREATE TABLE IF NOT EXISTS scout_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL UNIQUE,
+    kind TEXT DEFAULT 'state',
+    enabled INTEGER DEFAULT 1,
+    last_hash TEXT DEFAULT '',
+    last_checked TEXT DEFAULT ''
+  );
   `);
   // Default scout keywords (idempotent — safe on existing databases).
   d.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('scout_keywords', ?)`).run(
@@ -137,6 +146,48 @@ function migrate(d: Database.Database) {
       "youth development",
     ].join("\n")
   );
+  // Starter watch list for the state/foundation page watcher (Sections 5-6 funders).
+  // These URLs are a best-effort starting point — sites reorganize, so any source
+  // that errors in the morning report should be re-pointed via the Scout page.
+  const insSource = d.prepare(
+    `INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`
+  );
+  const sources: [string, string, string][] = [
+    ["Oklahoma State Dept. of Health — grants & procurement", "https://oklahoma.gov/health/about-us/procurement---grants-management.html", "state"],
+    ["ODMHSAS — procurement & funding", "https://oklahoma.gov/odmhsas/about/procurement-and-contracts.html", "state"],
+    ["Oklahoma Human Services — procurement & grants", "https://oklahoma.gov/okdhs/about/procurement.html", "state"],
+    ["Oklahoma Dept. of Commerce — community funding", "https://oklahoma.gov/commerce/community/community-development.html", "state"],
+    ["Oklahoma State Dept. of Education — grants", "https://sde.ok.gov/grants", "state"],
+    ["Oklahoma City Community Foundation — grants", "https://www.occf.org/grants/", "foundation"],
+    ["Tulsa Community Foundation — grants", "https://tulsacf.org/grants/", "foundation"],
+    ["Sarkeys Foundation — grants", "https://sarkeys.org/grants/", "foundation"],
+    ["Kirkpatrick Foundation — grants", "https://kirkpatrickfoundation.com/grants", "foundation"],
+    ["Inasmuch Foundation — grantmaking", "https://inasmuchfoundation.org/grantmaking", "foundation"],
+    ["Blue Cross Blue Shield of Oklahoma — community", "https://www.bcbsok.com/company-info/community-involvement", "foundation"],
+    ["ACF Administration for Native Americans (ANA)", "https://acf.gov/ana", "native"],
+    ["Indian Health Service — grants", "https://www.ihs.gov/dgm/funding/", "native"],
+    ["First Nations Development Institute — grantmaking", "https://www.firstnations.org/grantmaking/", "native"],
+    ["Native American Agriculture Fund", "https://nativeamericanagriculturefund.org/", "native"],
+  ];
+  for (const s of sources) insSource.run(...s);
+
+  // One-time keyword upgrade for existing databases: add Native-focused keywords.
+  const flag = d.prepare(`SELECT value FROM settings WHERE key='seed_native_keywords'`).get() as
+    | { value: string }
+    | undefined;
+  if (!flag) {
+    const row = d.prepare(`SELECT value FROM settings WHERE key='scout_keywords'`).get() as
+      | { value: string }
+      | undefined;
+    const current = (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    for (const kw of ["Native American families", "tribal health", "American Indian communities"]) {
+      if (!current.some((c) => c.toLowerCase() === kw.toLowerCase())) current.push(kw);
+    }
+    d.prepare(
+      `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
+    ).run(current.join("\n"));
+    d.prepare(`INSERT INTO settings (key, value) VALUES ('seed_native_keywords', 'done')`).run();
+  }
 }
 
 function seed(d: Database.Database) {

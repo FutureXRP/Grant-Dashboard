@@ -1,29 +1,58 @@
 import { revalidatePath } from "next/cache";
-import { latestReport, getKeywords, setKeywords } from "@/lib/scout";
+import { latestReport, getKeywords, setKeywords, listSources, addSource, deleteSource, toggleSource } from "@/lib/scout";
 import ScoutPanel from "@/components/ScoutPanel";
 
 export const dynamic = "force-dynamic";
 
-async function saveKeywords(formData: FormData) {
+async function saveKeywordsAction(formData: FormData) {
   "use server";
   setKeywords(String(formData.get("keywords") || ""));
+  revalidatePath("/scout");
+}
+
+async function addSourceAction(formData: FormData) {
+  "use server";
+  const name = String(formData.get("name") || "").trim();
+  const url = String(formData.get("url") || "").trim();
+  if (name && url) addSource(name, url, String(formData.get("kind") || "state"));
+  revalidatePath("/scout");
+}
+
+async function deleteSourceAction(formData: FormData) {
+  "use server";
+  deleteSource(Number(formData.get("id")));
+  revalidatePath("/scout");
+}
+
+async function toggleSourceAction(formData: FormData) {
+  "use server";
+  toggleSource(Number(formData.get("id")));
   revalidatePath("/scout");
 }
 
 export default function ScoutPage() {
   const report = latestReport();
   const keywords = getKeywords().join("\n");
+  const sources = listSources();
 
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-bold">Grant Scout</h1>
       <p className="text-sm text-gray-600 max-w-3xl">
-        Sweeps Grants.gov across all your keywords, dedupes against everything already seen, and has the AI grade each
-        open opportunity against your organization profile — <span className="font-medium">strong fit / possible fit /
-        unlikely / not eligible</span> — with a one-line reason. Federal only: foundations don&apos;t have a free search
-        API, so keep working the Funder database for those.
+        Every run: (1) sweeps Grants.gov across your keywords for federal opportunities — including Native-focused
+        programs like ANA that accept Native nonprofit organizations; (2) fetches every watched Oklahoma-agency,
+        foundation, and Native-funder page, detects changes, and extracts + grades any opportunity announced there.
+        Everything is graded against your organization profile with a one-line reason.
       </p>
-      <ScoutPanel initialReport={report} initialKeywords={keywords} saveKeywords={saveKeywords} />
+      <ScoutPanel
+        initialReport={report}
+        initialKeywords={keywords}
+        sources={sources}
+        saveKeywords={saveKeywordsAction}
+        addSource={addSourceAction}
+        deleteSource={deleteSourceAction}
+        toggleSource={toggleSourceAction}
+      />
       <div className="card p-4 text-xs text-gray-600 space-y-2 max-w-3xl">
         <h3 className="font-semibold text-sm text-gray-800">Run it automatically every morning</h3>
         <p>The scout runs whenever something POSTs to <code className="bg-gray-100 px-1 rounded">/api/scout</code>. On the machine hosting the app:</p>
