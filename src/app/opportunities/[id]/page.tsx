@@ -26,6 +26,12 @@ export default async function OpportunityDetail({ params }: { params: Promise<{ 
   if (!opp) notFound();
   ensureProposalSections(id);
   const tasks = d.prepare(`SELECT * FROM tasks WHERE opportunity_id=? ORDER BY done, id`).all(id) as Task[];
+  const screenRow = d
+    .prepare(`SELECT verdict FROM eligibility_screens WHERE opportunity_id=?`)
+    .get(id) as { verdict: string } | undefined;
+  const screenVerdict: string | null = screenRow?.verdict
+    ? (JSON.parse(screenRow.verdict).verdict as string)
+    : null;
   const scores: Record<string, number> = JSON.parse(opp.qual_scores || "{}");
   const total = qualTotal(scores);
   const days = daysUntil(opp.deadline);
@@ -48,6 +54,7 @@ export default async function OpportunityDetail({ params }: { params: Promise<{ 
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
+          <Link href={`/opportunities/${id}/eligibility`} className="btn-secondary">Eligibility screen</Link>
           <Link href={`/opportunities/${id}/proposal`} className="btn">Proposal workspace →</Link>
           <Link href={`/opportunities/${id}/export`} className="btn-secondary">Export / PDF</Link>
         </div>
@@ -77,6 +84,20 @@ export default async function OpportunityDetail({ params }: { params: Promise<{ 
           <span className={`rounded px-2 py-0.5 text-xs font-semibold ${deadlineColor(days)}`}>
             {days < 0 ? `${-days}d overdue` : `due in ${days}d`}
           </span>
+        )}
+        {screenVerdict && (
+          <Link
+            href={`/opportunities/${id}/eligibility`}
+            className={`rounded px-2 py-0.5 text-xs font-semibold ${
+              screenVerdict === "eligible"
+                ? "bg-green-100 text-green-800"
+                : screenVerdict === "not_eligible"
+                  ? "bg-red-100 text-red-800"
+                  : "bg-amber-100 text-amber-800"
+            }`}
+          >
+            {screenVerdict === "eligible" ? "✅ screened eligible" : screenVerdict === "not_eligible" ? "⛔ screened not eligible" : "⚠️ conditional"}
+          </Link>
         )}
       </div>
 

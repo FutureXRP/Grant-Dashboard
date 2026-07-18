@@ -96,6 +96,13 @@ function migrate(d: Database.Database) {
     detail TEXT DEFAULT '',
     status TEXT DEFAULT 'missing'
   );
+  CREATE TABLE IF NOT EXISTS eligibility_screens (
+    opportunity_id INTEGER PRIMARY KEY,
+    questions TEXT DEFAULT '[]',
+    answers TEXT DEFAULT '{}',
+    verdict TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS ai_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     opportunity_id INTEGER,
@@ -103,7 +110,33 @@ function migrate(d: Database.Database) {
     output TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT DEFAULT ''
+  );
+  CREATE TABLE IF NOT EXISTS scout_seen (
+    number TEXT PRIMARY KEY,
+    first_seen TEXT DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS scout_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT DEFAULT (datetime('now')),
+    report TEXT DEFAULT '{}'
+  );
   `);
+  // Default scout keywords (idempotent — safe on existing databases).
+  d.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('scout_keywords', ?)`).run(
+    [
+      "community health",
+      "early childhood education",
+      "rural health",
+      "behavioral health",
+      "diabetes prevention",
+      "family support services",
+      "childcare facilities",
+      "youth development",
+    ].join("\n")
+  );
 }
 
 function seed(d: Database.Database) {

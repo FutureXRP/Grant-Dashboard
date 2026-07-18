@@ -34,6 +34,8 @@ hard guardrails baked into every prompt:
 
 | Agent | Where | What it does |
 |-------|-------|--------------|
+| **Grant Scout** | Scout page (+ cron) | Every morning: sweeps Grants.gov across your keyword list, dedupes against everything already seen, and grades each open opportunity against your org profile — strong fit / possible fit / unlikely / **not eligible** — with a one-line reason. NEW badges mark what appeared since the last sweep. Automate with one cron line (shown on the page): `0 7 * * * curl -s -X POST http://localhost:3000/api/scout`. Federal only — foundations have no free search API. |
+| **Eligibility Screener** | Eligibility screen (per opportunity) | Reads the NOFO and interviews *you*: the specific facts that rule you in or out (status, classifications, enrollment numbers, designations), each tagged knockout vs. competitiveness and with **exactly where to find the answer** — which document, which website, who to call. Your answers produce a structured verdict: Eligible / Not eligible / Conditional, requirement by requirement, with next steps for anything unverified. The verdict badges the opportunity across the app. |
 | **NOFO Analyzer** | Opportunity page | Paste the funding notice → eligibility, required registrations/partners/attachments, scoring criteria, project concepts, budget guidance, timeline, compliance risks, narrative outline, honest probability |
 | **Section Drafter** | Each proposal section | Drafts from the org profile + narrative library, tailored to the NOFO; revises rather than overwrites an existing draft |
 | **Improve / Shorten** | Each section | Tightens prose without adding claims; shortens to a target word count |
