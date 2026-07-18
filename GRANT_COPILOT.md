@@ -69,6 +69,29 @@ npm run build && npm start     # production
   persistent disk for `data/`). It has **no login system** — keep it on a private network, behind
   your host's authentication, or on one trusted machine. Don't expose it to the open internet as-is.
 
+## Troubleshooting
+
+**"Cannot find native binding … npm has a bug related to optional dependencies" (build error on globals.css)**
+This is a known npm bug ([npm/cli#4828](https://github.com/npm/cli/issues/4828)): npm skips the
+platform-specific native packages Tailwind needs, usually because `package-lock.json` was generated
+on a different OS than yours. Fix — from the project folder, with the dev server stopped:
+
+```bash
+rm -rf node_modules package-lock.json     # Windows PowerShell: Remove-Item -Recurse -Force node_modules, package-lock.json
+npm install
+npm run dev
+```
+
+Your `.env.local` and the `data/` folder are not touched by this.
+
+**"Could not locate the bindings file" mentioning better_sqlite3**
+Same family of problem, for the database driver. Run `npm rebuild better-sqlite3`, or use the full
+fix above.
+
+**AI buttons return "ANTHROPIC_API_KEY is not set"**
+The key goes in `.env.local` in the project root (see Running it above) — then restart the app; the
+key is only read at startup.
+
 ## What was deliberately left out (and why)
 
 From the 25-section playbook, this build skips: HR/volunteer/facilities/emergency-management
