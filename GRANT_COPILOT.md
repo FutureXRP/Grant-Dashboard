@@ -94,6 +94,11 @@ Your `.env.local` and the `data/` folder are not touched by this.
 Same family of problem, for the database driver. Run `npm rebuild better-sqlite3`, or use the full
 fix above.
 
+**"__webpack_require__.n is not a function" or other odd runtime errors after a `git pull`**
+The Next.js dev cache is stale — this happens when new code is pulled while `npm run dev` is
+running. Stop the dev server (Ctrl+C), run `rm -rf .next`, start it again, and hard-refresh the
+browser (Cmd+Shift+R). Habit that prevents it: stop the server before every `git pull`.
+
 **AI buttons return "ANTHROPIC_API_KEY is not set"**
 The key goes in `.env.local` in the project root (see Running it above) — then restart the app; the
 key is only read at startup.
