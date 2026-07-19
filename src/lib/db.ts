@@ -188,6 +188,37 @@ function migrate(d: Database.Database) {
     ).run(current.join("\n"));
     d.prepare(`INSERT INTO settings (key, value) VALUES ('seed_native_keywords', 'done')`).run();
   }
+
+  // One-time keyword upgrade v3: program-specific phrases that match how federal
+  // notices are actually worded (existing user keywords are preserved).
+  const flag3 = d.prepare(`SELECT value FROM settings WHERE key='seed_keywords_v3'`).get() as
+    | { value: string }
+    | undefined;
+  if (!flag3) {
+    const row = d.prepare(`SELECT value FROM settings WHERE key='scout_keywords'`).get() as
+      | { value: string }
+      | undefined;
+    const current = (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    for (const kw of [
+      "maternal and child health",
+      "telehealth",
+      "community health workers",
+      "school readiness",
+      "child care",
+      "nutrition education",
+      "obesity prevention",
+      "community facilities",
+      "trauma-informed",
+      "suicide prevention",
+      "fatherhood",
+    ]) {
+      if (!current.some((c) => c.toLowerCase() === kw.toLowerCase())) current.push(kw);
+    }
+    d.prepare(
+      `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
+    ).run(current.join("\n"));
+    d.prepare(`INSERT INTO settings (key, value) VALUES ('seed_keywords_v3', 'done')`).run();
+  }
 }
 
 function seed(d: Database.Database) {

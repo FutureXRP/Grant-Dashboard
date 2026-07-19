@@ -29,6 +29,7 @@ export default function ScoutPanel({
   sources,
   saveKeywords,
   addSource,
+  editSource,
   deleteSource,
   toggleSource,
 }: {
@@ -37,6 +38,7 @@ export default function ScoutPanel({
   sources: WatchSource[];
   saveKeywords: (formData: FormData) => Promise<void>;
   addSource: (formData: FormData) => Promise<void>;
+  editSource: (formData: FormData) => Promise<void>;
   deleteSource: (formData: FormData) => Promise<void>;
   toggleSource: (formData: FormData) => Promise<void>;
 }) {
@@ -271,13 +273,20 @@ export default function ScoutPanel({
           <div className="divide-y">
             {sources.map((s) => (
               <div key={s.id} className="py-2 flex items-center gap-2 text-sm">
-                <span className="text-[10px] text-gray-400 w-24 shrink-0">{KIND_LABEL[s.kind] ?? s.kind}</span>
-                <span className={`flex-1 min-w-0 truncate ${s.enabled ? "" : "text-gray-400 line-through"}`}>
-                  {s.name}{" "}
-                  <a href={s.url} target="_blank" className="text-gray-400 hover:underline text-xs">
+                <span className="text-[10px] text-gray-400 w-20 shrink-0">{KIND_LABEL[s.kind] ?? s.kind}</span>
+                <form action={editSource} className="flex-1 flex items-center gap-2 min-w-0">
+                  <input type="hidden" name="id" value={s.id} />
+                  <input
+                    name="name"
+                    defaultValue={s.name}
+                    className={`input w-56 shrink-0 text-xs ${s.enabled ? "" : "text-gray-400 line-through"}`}
+                  />
+                  <input name="url" defaultValue={s.url} className="input flex-1 min-w-0 text-xs font-mono" />
+                  <a href={s.url} target="_blank" className="text-gray-400 hover:underline text-xs shrink-0" title="Open page">
                     ↗
                   </a>
-                </span>
+                  <button className="btn-secondary text-xs shrink-0" title="Save name/URL changes">save</button>
+                </form>
                 <form action={toggleSource}>
                   <input type="hidden" name="id" value={s.id} />
                   <button className="btn-secondary text-xs">{s.enabled ? "disable" : "enable"}</button>

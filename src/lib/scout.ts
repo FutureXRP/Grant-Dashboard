@@ -182,6 +182,10 @@ export function addSource(name: string, url: string, kind: string) {
   db().prepare(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`).run(name, url, kind);
 }
 
+export function updateSource(id: number, name: string, url: string) {
+  db().prepare(`UPDATE scout_sources SET name=?, url=?, last_hash='' WHERE id=?`).run(name, url, id);
+}
+
 export function deleteSource(id: number) {
   db().prepare(`DELETE FROM scout_sources WHERE id=?`).run(id);
 }

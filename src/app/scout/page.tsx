@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { latestReport, getKeywords, setKeywords, listSources, addSource, deleteSource, toggleSource } from "@/lib/scout";
+import { latestReport, getKeywords, setKeywords, listSources, addSource, updateSource, deleteSource, toggleSource } from "@/lib/scout";
 import ScoutPanel from "@/components/ScoutPanel";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,15 @@ async function addSourceAction(formData: FormData) {
   const name = String(formData.get("name") || "").trim();
   const url = String(formData.get("url") || "").trim();
   if (name && url) addSource(name, url, String(formData.get("kind") || "state"));
+  revalidatePath("/scout");
+}
+
+async function editSourceAction(formData: FormData) {
+  "use server";
+  const id = Number(formData.get("id"));
+  const name = String(formData.get("name") || "").trim();
+  const url = String(formData.get("url") || "").trim();
+  if (id && name && url) updateSource(id, name, url);
   revalidatePath("/scout");
 }
 
@@ -50,6 +59,7 @@ export default function ScoutPage() {
         sources={sources}
         saveKeywords={saveKeywordsAction}
         addSource={addSourceAction}
+        editSource={editSourceAction}
         deleteSource={deleteSourceAction}
         toggleSource={toggleSourceAction}
       />
