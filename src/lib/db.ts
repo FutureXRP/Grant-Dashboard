@@ -6,6 +6,7 @@ import { PROPOSAL_SECTIONS } from "./stages";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "grant-copilot.db");
+export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 
 let _db: Database.Database | null = null;
 
@@ -123,6 +124,11 @@ function migrate(d: Database.Database) {
     created_at TEXT DEFAULT (datetime('now')),
     report TEXT DEFAULT '{}'
   );
+  CREATE TABLE IF NOT EXISTS opportunity_packets (
+    opportunity_id INTEGER PRIMARY KEY,
+    packet TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS scout_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -133,6 +139,11 @@ function migrate(d: Database.Database) {
     last_checked TEXT DEFAULT ''
   );
   `);
+  // Column migrations for existing databases (SQLite has no IF NOT EXISTS for columns).
+  const docCols = (d.prepare(`PRAGMA table_info(documents)`).all() as { name: string }[]).map((c) => c.name);
+  if (!docCols.includes("content_text")) d.exec(`ALTER TABLE documents ADD COLUMN content_text TEXT DEFAULT ''`);
+  if (!docCols.includes("file_name")) d.exec(`ALTER TABLE documents ADD COLUMN file_name TEXT DEFAULT ''`);
+
   // Default scout keywords (idempotent — safe on existing databases).
   d.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('scout_keywords', ?)`).run(
     [

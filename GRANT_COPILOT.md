@@ -36,6 +36,7 @@ hard guardrails baked into every prompt:
 |-------|-------|--------------|
 | **Grant Scout** | Scout page (+ cron) | Every morning, two sweeps: **(1) Federal** — searches Grants.gov across your keyword list (including Native-focused keywords); **(2) Page watch** — fetches every watched Oklahoma-agency, foundation, and Native-funder grants page (starter list of 15, fully editable), detects changes since yesterday, and AI-extracts any announced opportunity. Everything is graded against your org profile — strong fit / possible fit / unlikely / **not eligible** — with a one-line reason, deduped against everything already seen (NEW badges). The graders know the ANA nuance: programs open to "Native nonprofit organizations" are potential fits, not auto-rejects. Automate with one cron line (shown on the page): `0 7 * * * curl -s -X POST http://localhost:3000/api/scout`. Sources that error (sites reorganize) are flagged in the report for re-pointing. |
 | **Eligibility Screener** | Eligibility screen (per opportunity) | Reads the NOFO and interviews *you*: the specific facts that rule you in or out (status, classifications, enrollment numbers, designations), each tagged knockout vs. competitiveness and with **exactly where to find the answer** — which document, which website, who to call. Your answers produce a structured verdict: Eligible / Not eligible / Conditional, requirement by requirement, with next steps for anything unverified. The verdict badges the opportunity across the app. |
+| **Packet Builder** | Opportunity page | Matches the NOFO's required attachments against the Library — every requirement graded ready / has-issue / missing, with download links for matched files and exact instructions for gaps. The Library itself now holds real content: upload the actual file for each item (stored in `data/uploads/`, downloadable anytime) or type the information in (UEI numbers, rosters) — either auto-marks the item current. |
 | **NOFO Analyzer** | Opportunity page | Paste the funding notice → eligibility, required registrations/partners/attachments, scoring criteria, project concepts, budget guidance, timeline, compliance risks, narrative outline, honest probability |
 | **Section Drafter** | Each proposal section | Drafts from the org profile + narrative library, tailored to the NOFO; revises rather than overwrites an existing draft |
 | **Improve / Shorten** | Each section | Tightens prose without adding claims; shortens to a target word count |
@@ -60,8 +61,9 @@ npm run dev                    # development, http://localhost:3000
 npm run build && npm start     # production
 ```
 
-- **Storage:** a single SQLite file at `data/grant-copilot.db` (created and seeded on first run;
-  gitignored). Back it up by copying the file. No database server, no accounts to configure.
+- **Storage:** a single SQLite file at `data/grant-copilot.db` plus uploaded documents in
+  `data/uploads/` (both created on first run; gitignored). Back it up by copying the `data/`
+  folder. No database server, no accounts to configure.
 - **Without an API key** everything works except the AI buttons, which explain what's missing.
 - **Grants.gov search** calls the free public API directly — no key needed. (It's unreachable from
   some locked-down networks; the page reports the error rather than failing silently.)

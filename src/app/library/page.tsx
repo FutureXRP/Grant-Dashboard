@@ -1,9 +1,13 @@
 import { db } from "@/lib/db";
 import { updateDocument, saveNarrative } from "@/lib/actions";
+import DocUpload from "@/components/DocUpload";
 
 export const dynamic = "force-dynamic";
 
-type Doc = { id: number; name: string; category: string; status: string; expires: string; notes: string };
+type Doc = {
+  id: number; name: string; category: string; status: string; expires: string;
+  notes: string; content_text: string; file_name: string;
+};
 type Narr = { id: number; category: string; title: string; content: string; updated_at: string };
 
 export default function Library() {
@@ -31,21 +35,69 @@ export default function Library() {
             ⚠ {expiringSoon.length} document(s) expired or expiring within 60 days.
           </p>
         )}
-        <div className="card divide-y">
+        <div className="space-y-2">
           {docs.map((doc) => (
-            <form key={doc.id} action={updateDocument.bind(null, doc.id)} className="flex items-center gap-3 p-2.5 text-sm">
-              <span className="w-56 shrink-0 font-medium">{doc.name}</span>
-              <span className="w-24 shrink-0 text-xs text-gray-400">{doc.category}</span>
-              <select name="status" defaultValue={doc.status} className="input w-28">
-                <option value="missing">missing</option>
-                <option value="draft">draft</option>
-                <option value="current">current</option>
-                <option value="expired">expired</option>
-              </select>
-              <input name="expires" type="date" defaultValue={doc.expires} className="input w-40" title="Expiration" />
-              <input name="notes" defaultValue={doc.notes} className="input flex-1" placeholder="Location / notes" />
-              <button className="btn-secondary text-xs shrink-0">Save</button>
-            </form>
+            <details key={doc.id} className="card">
+              <summary className="cursor-pointer p-3 flex items-center gap-3 text-sm">
+                <span className="font-medium flex-1">{doc.name}</span>
+                <span className="text-xs text-gray-400 w-20">{doc.category}</span>
+                {doc.file_name && <span className="text-[10px] rounded bg-emerald-100 text-emerald-800 px-1.5 py-0.5 font-semibold">📄 file</span>}
+                {doc.content_text && <span className="text-[10px] rounded bg-blue-100 text-blue-800 px-1.5 py-0.5 font-semibold">✎ info</span>}
+                <span
+                  className={`text-[10px] rounded px-1.5 py-0.5 font-semibold ${
+                    doc.status === "current"
+                      ? "bg-green-100 text-green-800"
+                      : doc.status === "draft"
+                        ? "bg-amber-100 text-amber-800"
+                        : doc.status === "expired"
+                          ? "bg-red-100 text-red-700"
+                          : "bg-gray-200 text-gray-600"
+                  }`}
+                >
+                  {doc.status}
+                </span>
+              </summary>
+              <div className="px-4 pb-4 space-y-3">
+                <div>
+                  <label className="label">Upload the document (PDF/Word/image — replaces the previous file)</label>
+                  <DocUpload docId={doc.id} currentFile={doc.file_name} />
+                </div>
+                <form action={updateDocument.bind(null, doc.id)} className="space-y-2">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="label">Status</label>
+                      <select name="status" defaultValue={doc.status} className="input">
+                        <option value="missing">missing</option>
+                        <option value="draft">draft</option>
+                        <option value="current">current</option>
+                        <option value="expired">expired</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label">Expires</label>
+                      <input name="expires" type="date" defaultValue={doc.expires} className="input" />
+                    </div>
+                    <div>
+                      <label className="label">Notes / physical location</label>
+                      <input name="notes" defaultValue={doc.notes} className="input" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="label">
+                      Or type the information itself (for items that are data, not files — UEI number, board roster…)
+                    </label>
+                    <textarea
+                      name="content_text"
+                      rows={doc.content_text ? 4 : 2}
+                      defaultValue={doc.content_text}
+                      className="input text-xs font-mono"
+                      placeholder="e.g. UEI: ABC123DEF456 — registered 3/2026, renews annually"
+                    />
+                  </div>
+                  <button className="btn-secondary">Save</button>
+                </form>
+              </div>
+            </details>
           ))}
         </div>
       </section>

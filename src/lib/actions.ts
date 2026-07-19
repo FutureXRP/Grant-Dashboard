@@ -135,12 +135,19 @@ export async function setReadiness(id: number, status: string) {
 }
 
 export async function updateDocument(id: number, formData: FormData) {
+  const contentText = String(formData.get("content_text") ?? "");
+  let status = String(formData.get("status") || "missing");
+  // Filling in info-text upgrades a missing item automatically.
+  if (status === "missing" && contentText.trim()) status = "current";
   db()
-    .prepare(`UPDATE documents SET status=?, expires=?, notes=?, updated_at=datetime('now') WHERE id=?`)
+    .prepare(
+      `UPDATE documents SET status=?, expires=?, notes=?, content_text=?, updated_at=datetime('now') WHERE id=?`
+    )
     .run(
-      String(formData.get("status") || "missing"),
+      status,
       String(formData.get("expires") || ""),
       String(formData.get("notes") || ""),
+      contentText,
       id
     );
   revalidatePath("/library");

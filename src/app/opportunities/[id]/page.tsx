@@ -7,6 +7,8 @@ import {
   saveNofoText, toggleTask, addTask,
 } from "@/lib/actions";
 import AiPanel from "@/components/AiPanel";
+import PacketPanel from "@/components/PacketPanel";
+import { getPacket } from "@/lib/packet";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +34,7 @@ export default async function OpportunityDetail({ params }: { params: Promise<{ 
   const screenVerdict: string | null = screenRow?.verdict
     ? (JSON.parse(screenRow.verdict).verdict as string)
     : null;
+  const packet = getPacket(id);
   const scores: Record<string, number> = JSON.parse(opp.qual_scores || "{}");
   const total = qualTotal(scores);
   const days = daysUntil(opp.deadline);
@@ -224,6 +227,9 @@ export default async function OpportunityDetail({ params }: { params: Promise<{ 
           ]}
         />
       </div>
+
+      {/* Attachment packet */}
+      <PacketPanel opportunityId={id} initialPacket={packet} />
 
       {/* Tasks */}
       <div className="card p-4">
