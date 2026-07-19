@@ -61,9 +61,13 @@ npm run dev                    # development, http://localhost:3000
 npm run build && npm start     # production
 ```
 
-- **Storage:** a single SQLite file at `data/grant-copilot.db` plus uploaded documents in
-  `data/uploads/` (both created on first run; gitignored). Back it up by copying the `data/`
-  folder. No database server, no accounts to configure.
+- **Storage:** a single SQLite file at `data/grant-copilot.db` plus uploaded documents. Documents
+  go to **Supabase Storage** (durable cloud, private bucket auto-created) when `SUPABASE_URL` and
+  `SUPABASE_SERVICE_ROLE_KEY` are in `.env.local` — get both from your Supabase project under
+  Settings → API (free tier is plenty; the service_role key is server-side only, never share it).
+  Without those, documents live in local `data/uploads/`, and reads fall back to local disk so
+  pre-Supabase uploads stay downloadable. Back up the `data/` folder either way (it still holds
+  the database).
 - **Without an API key** everything works except the AI buttons, which explain what's missing.
 - **Grants.gov search** calls the free public API directly — no key needed. (It's unreachable from
   some locked-down networks; the page reports the error rather than failing silently.)
