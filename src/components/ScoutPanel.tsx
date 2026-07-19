@@ -59,30 +59,80 @@ export default function ScoutPanel({
     setRunning(true);
     setError("");
     setProgress(null);
-    // Poll live progress while the run is in flight.
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await fetch("/api/scout/progress");
-        const data = await res.json();
-        if (data.progress?.active) setProgress(data.progress);
-      } catch {
-        /* polling is best-effort */
-      }
-    }, 1200);
-    try {
-      const res = await fetch("/api/scout", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Scout run failed");
-      setReport(data.report);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Scout run failed");
-    } finally {
+    const startedAt = Date.now();
+    const prevRanAt = report?.ranAt ?? null;
+    let sawActive = false;
+    let finished = false;
+
+    const finish = (r: ScoutReport | null, errMsg?: string) => {
+      if (finished) return;
+      finished = true;
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
+      if (r) setReport(r);
+      if (errMsg) setError(errMsg);
       setProgress(null);
       setRunning(false);
+    };
+
+    const fetchLatestReport = async (): Promise<ScoutReport | null> => {
+      try {
+        const res = await fetch("/api/scout");
+        const data = await res.json();
+        return data.report ?? null;
+      } catch {
+        return null;
+      }
+    };
+
+    // The poll loop is the source of truth for completion. Hosted setups
+    // (Codespaces, some proxies) cut off the long-running POST with a 504
+    // even though the run continues server-side — so we never rely on it.
+    pollRef.current = setInterval(async () => {
+      if (finished) return;
+      try {
+        const res = await fetch("/api/scout/progress");
+        const data = await res.json();
+        const p: ScoutProgress | null = data.progress ?? null;
+        if (p?.active) {
+          sawActive = true;
+          setProgress(p);
+          return;
+        }
+        // Progress no longer active — if a new report exists, the run is done.
+        if (sawActive || Date.now() - startedAt > 8000) {
+          const latest = await fetchLatestReport();
+          if (latest && latest.ranAt !== prevRanAt) {
+            finish(latest);
+          } else if (sawActive) {
+            finish(null, "The run ended but no report was saved — check the server terminal for errors.");
+          }
+        }
+      } catch {
+        /* transient polling error — keep going */
+      }
+      if (!finished && Date.now() - startedAt > 15 * 60 * 1000) {
+        finish(null, "Timed out waiting for the run to finish.");
+      }
+    }, 1500);
+
+    // Kick off the run. If this response makes it back intact, use it as a
+    // fast path; if the gateway kills it, the poll loop finishes the job.
+    try {
+      const res = await fetch("/api/scout", { method: "POST" });
+      const text = await res.text();
+      let data: { report?: ScoutReport; error?: string } = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        /* gateway error page, not JSON — ignore; poll loop takes over */
+      }
+      if (res.ok && data.report) finish(data.report);
+      else if (!res.ok && data.error) finish(null, data.error);
+    } catch {
+      /* connection cut mid-run — poll loop takes over */
     }
   }
 
