@@ -219,6 +219,60 @@ function migrate(d: Database.Database) {
     ).run(current.join("\n"));
     d.prepare(`INSERT INTO settings (key, value) VALUES ('seed_keywords_v3', 'done')`).run();
   }
+
+  // One-time upgrade v4: food-security and outdoor-recreation lanes
+  // (food distribution / commercial kitchen; playground, splashpad, walking track).
+  const flag4 = d.prepare(`SELECT value FROM settings WHERE key='seed_v4_food_rec'`).get() as
+    | { value: string }
+    | undefined;
+  if (!flag4) {
+    const row = d.prepare(`SELECT value FROM settings WHERE key='scout_keywords'`).get() as
+      | { value: string }
+      | undefined;
+    const current = (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    for (const kw of [
+      "food security",
+      "food access",
+      "community food projects",
+      "summer food service",
+      "farm to school",
+      "outdoor recreation",
+      "physical activity",
+      "playground",
+    ]) {
+      if (!current.some((c) => c.toLowerCase() === kw.toLowerCase())) current.push(kw);
+    }
+    d.prepare(
+      `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
+    ).run(current.join("\n"));
+
+    const insSrc = d.prepare(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`);
+    const newSources: [string, string, string][] = [
+      ["KABOOM! — playground grants", "https://kaboom.org/grants", "foundation"],
+      ["AARP Community Challenge (walkability/parks quick-builds)", "https://www.aarp.org/livable-communities/community-challenge/", "foundation"],
+      ["T-Mobile Hometown Grants", "https://www.t-mobile.com/brand/hometown-grants", "foundation"],
+      ["Community Food Bank of Eastern Oklahoma", "https://okfoodbank.org/", "foundation"],
+      ["Oklahoma Tourism & Recreation — grants (LWCF)", "https://www.travelok.com/grants", "state"],
+    ];
+    for (const s of newSources) insSrc.run(...s);
+
+    const insFunder2 = d.prepare(
+      `INSERT INTO funders (name, type, tier, focus, award_range, projects, website) VALUES (@name, @type, @tier, @focus, @award_range, @projects, @website)`
+    );
+    const newFunders = [
+      { name: "Tulsa County CDBG (Oakhurst is unincorporated Tulsa County)", type: "state", tier: 1, focus: "Community Development Block Grants for low/moderate-income areas — public facilities, parks, playgrounds, sidewalks, community centers", award_range: "$50K – $500K", projects: "Playground, splashpad, walking track restoration, food distribution buildout — verify Oakhurst census-tract LMI qualification", website: "https://www.tulsacounty.org" },
+      { name: "Land & Water Conservation Fund (via Oklahoma Tourism & Recreation)", type: "state", tier: 2, focus: "Outdoor recreation capital: parks, playgrounds, splash pads, trails — typically 50% match required", award_range: "$75K – $500K (50% match)", projects: "Playground + splashpad + walking track as one outdoor recreation project on the 10 acres", website: "https://www.travelok.com" },
+      { name: "USDA Community Food Projects / NIFA", type: "federal", tier: 2, focus: "Community food security: food access, distribution, community kitchens in underserved areas", award_range: "$125K – $400K", projects: "Food distribution center + community kitchen serving Oakhurst families", website: "https://www.nifa.usda.gov" },
+      { name: "Community Food Bank of Eastern Oklahoma", type: "foundation", tier: 1, focus: "Partner-agency network for the Tulsa region — food supply, distribution infrastructure, capacity support", award_range: "Partnership + equipment support", projects: "Become a partner agency to source food for the distribution center; ask about capacity/equipment grants", website: "https://okfoodbank.org" },
+      { name: "Child & Adult Care Food Program + Summer Food Service (OSDE child nutrition)", type: "state", tier: 1, focus: "Ongoing federal meal REIMBURSEMENT (not a grant): meals/snacks at the Early Learning Center and summer meals for community kids from the kitchen", award_range: "Recurring per-meal reimbursement", projects: "CACFP for enrolled children; SFSP summer meal site once the kitchen is licensed", website: "https://sde.ok.gov" },
+      { name: "KABOOM!", type: "foundation", tier: 2, focus: "Playground builds for kids in underserved communities (often with corporate partners + community build days)", award_range: "Equipment + build support", projects: "Oakhurst community playground on the campus acreage", website: "https://kaboom.org" },
+      { name: "AARP Community Challenge", type: "foundation", tier: 2, focus: "Quick-turn quality-of-life projects: walkability, parks, public spaces (annual cycle, all ages benefit)", award_range: "$2.5K – $50K", projects: "Walking track restoration as an intergenerational fitness loop", website: "https://www.aarp.org/livable-communities/community-challenge/" },
+      { name: "T-Mobile Hometown Grants", type: "corporate", tier: 2, focus: "Small-town community-space projects (towns under 50K)", award_range: "Up to $50K", projects: "Outdoor community space / track / playground elements", website: "https://www.t-mobile.com/brand/hometown-grants" },
+    ];
+    for (const f of newFunders) insFunder2.run(f);
+
+    d.prepare(`INSERT INTO settings (key, value) VALUES ('seed_v4_food_rec', 'done')`).run();
+  }
 }
 
 function seed(d: Database.Database) {
