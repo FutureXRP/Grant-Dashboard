@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { latestReport, getKeywords, setKeywords, listSources, addSource, updateSource, deleteSource, toggleSource } from "@/lib/scout";
+import { latestReport, getKeywords, setKeywords, listSources, addSource, updateSource, deleteSource, toggleSource, listDismissed } from "@/lib/scout";
 import ScoutPanel from "@/components/ScoutPanel";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +43,7 @@ export default function ScoutPage() {
   const report = latestReport();
   const keywords = getKeywords().join("\n");
   const sources = listSources();
+  const dismissed = listDismissed();
 
   return (
     <div className="space-y-4">
@@ -57,6 +58,7 @@ export default function ScoutPage() {
         initialReport={report}
         initialKeywords={keywords}
         sources={sources}
+        initialDismissed={dismissed}
         saveKeywords={saveKeywordsAction}
         addSource={addSourceAction}
         editSource={editSourceAction}

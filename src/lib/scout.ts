@@ -27,6 +27,7 @@ export type WatchSource = {
 };
 
 export type WatchFinding = {
+  key: string;
   source: string;
   source_url: string;
   title: string;
@@ -166,12 +167,88 @@ function stripHtml(html: string): string {
     .trim();
 }
 
-function hashText(s: string): string {
+export function hashText(s: string): string {
   let h = 0;
   for (let i = 0; i < s.length; i++) {
     h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
   }
   return String(h);
+}
+
+export function watchKey(source: string, title: string): string {
+  return "watch:" + hashText(`${source}|${title}`.toLowerCase());
+}
+
+// True when a deadline string clearly names a calendar date that has passed.
+// Handles MM/DD/YYYY, YYYY-MM-DD, and "Month D, YYYY" (with ordinals) — even
+// inside longer text like "March 1, 2026 at 5pm CT". Anything unparseable
+// ("Rolling", "Fall 2026", "") is treated as NOT passed, so we never hide an
+// opportunity we can't be sure about.
+export function deadlinePassed(deadline: string, now: number = Date.now()): boolean {
+  const s = (deadline || "").trim();
+  if (!s) return false;
+  let m = s.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+  if (m) {
+    const t = Date.parse(`${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}T23:59:59`);
+    return !Number.isNaN(t) && t < now;
+  }
+  m = s.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (m) {
+    const t = Date.parse(`${m[0]}T23:59:59`);
+    return !Number.isNaN(t) && t < now;
+  }
+  m = s.match(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/);
+  if (m) {
+    const t = Date.parse(`${m[1]} ${m[2]}, ${m[3]}`);
+    // +1 day: the deadline day itself still counts.
+    return !Number.isNaN(t) && t + 24 * 60 * 60 * 1000 < now;
+  }
+  return false;
+}
+
+// ---- Dismissed grants (never show again) ----
+
+export type DismissedItem = { key: string; title: string; dismissed_at: string };
+
+export function listDismissed(): DismissedItem[] {
+  return db()
+    .prepare(`SELECT key, title, dismissed_at FROM scout_dismissed ORDER BY dismissed_at DESC`)
+    .all() as DismissedItem[];
+}
+
+export function dismissKeyed(key: string, title: string) {
+  db()
+    .prepare(`INSERT OR IGNORE INTO scout_dismissed (key, title) VALUES (?, ?)`)
+    .run(key, title);
+  scrubLatestReport(key);
+}
+
+export function restoreKeyed(key: string) {
+  db().prepare(`DELETE FROM scout_dismissed WHERE key=?`).run(key);
+}
+
+// Remove a dismissed item from the most recent saved report so it disappears
+// immediately (not just on the next run).
+function scrubLatestReport(key: string) {
+  const d = db();
+  const row = d.prepare(`SELECT id, report FROM scout_reports ORDER BY id DESC LIMIT 1`).get() as
+    | { id: number; report: string }
+    | undefined;
+  if (!row) return;
+  try {
+    const report = JSON.parse(row.report) as ScoutReport;
+    report.hits = report.hits.filter((h) => h.number !== key);
+    if (report.watch) {
+      report.watch.findings = report.watch.findings.filter(
+        (f) => (f.key || watchKey(f.source, f.title)) !== key
+      );
+    }
+    report.totalFound = report.hits.length;
+    report.newCount = report.hits.filter((h) => h.isNew).length;
+    d.prepare(`UPDATE scout_reports SET report=? WHERE id=?`).run(JSON.stringify(report), row.id);
+  } catch {
+    /* malformed stored report — leave it */
+  }
 }
 
 export function listSources(): WatchSource[] {
@@ -259,16 +336,19 @@ async function runWatch(errors: string[], tick: (label: string) => void): Promis
         const parsed = JSON.parse(text) as { summary: string; items: Omit<WatchFinding, "isNew" | "source_url">[] };
         summary = parsed.summary;
         const urlByName = new Map(sources.map((s) => [s.name, s.url]));
+        const dismissedKeys = new Set(listDismissed().map((r) => r.key));
         const seen = new Set(
           (d.prepare(`SELECT number FROM scout_seen`).all() as { number: string }[]).map((r) => r.number)
         );
         const insSeen = d.prepare(`INSERT OR IGNORE INTO scout_seen (number) VALUES (?)`);
-        findings = parsed.items.map((item) => {
-          const key = "watch:" + hashText(`${item.source}|${item.title}`.toLowerCase());
-          const isNew = !seen.has(key);
-          insSeen.run(key);
-          return { ...item, source_url: urlByName.get(item.source) ?? "", isNew };
-        });
+        findings = parsed.items
+          .map((item) => {
+            const key = watchKey(item.source, item.title);
+            const isNew = !seen.has(key);
+            insSeen.run(key);
+            return { ...item, key, source_url: urlByName.get(item.source) ?? "", isNew };
+          })
+          .filter((f) => !dismissedKeys.has(f.key) && !deadlinePassed(f.deadline));
       }
     } catch (e) {
       errors.push(`Watch extraction failed: ${e instanceof Error ? e.message : "unknown error"}`);
@@ -358,13 +438,11 @@ export async function runScout(): Promise<ScoutReport> {
     }
   }
 
-  // Skip anything whose deadline already passed.
-  const now = Date.now();
-  const hits = Array.from(byNumber.values()).filter((h) => {
-    const m = h.closeDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (!m) return true; // forecasted / no date yet — keep
-    return new Date(`${m[3]}-${m[1]}-${m[2]}T23:59:59`).getTime() >= now;
-  });
+  // Skip anything whose deadline already passed, and anything dismissed.
+  const dismissed = new Set(listDismissed().map((r) => r.key));
+  const hits = Array.from(byNumber.values()).filter(
+    (h) => !dismissed.has(h.number) && !deadlinePassed(h.closeDate)
+  );
 
   // Mark new vs. previously seen, then record all as seen.
   const seen = new Set(
@@ -460,5 +538,21 @@ export function latestReport(): ScoutReport | null {
   const row = db().prepare(`SELECT report FROM scout_reports ORDER BY id DESC LIMIT 1`).get() as
     | { report: string }
     | undefined;
-  return row ? (JSON.parse(row.report) as ScoutReport) : null;
+  if (!row) return null;
+  const report = JSON.parse(row.report) as ScoutReport;
+  // Filter at read time so dismissed grants and missed windows leave the page
+  // immediately — even between runs, and even for reports saved before this
+  // feature existed.
+  const dismissed = new Set(listDismissed().map((r) => r.key));
+  report.hits = (report.hits ?? []).filter(
+    (h) => !dismissed.has(h.number) && !deadlinePassed(h.closeDate)
+  );
+  if (report.watch) {
+    report.watch.findings = (report.watch.findings ?? []).filter(
+      (f) => !dismissed.has(f.key || watchKey(f.source, f.title)) && !deadlinePassed(f.deadline)
+    );
+  }
+  report.totalFound = report.hits.length;
+  report.newCount = report.hits.filter((h) => h.isNew).length;
+  return report;
 }

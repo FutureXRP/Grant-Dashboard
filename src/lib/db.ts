@@ -129,6 +129,11 @@ function migrate(d: Database.Database) {
     packet TEXT DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS scout_dismissed (
+    key TEXT PRIMARY KEY,
+    title TEXT DEFAULT '',
+    dismissed_at TEXT DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS scout_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

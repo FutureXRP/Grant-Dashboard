@@ -23,10 +23,54 @@ const KIND_LABEL: Record<string, string> = {
   native: "Native funders",
 };
 
+const FIT_RANK: Record<string, number> = {
+  strong_fit: 0,
+  possible_fit: 1,
+  unlikely: 2,
+  not_eligible: 3,
+};
+function fitRank(grade?: string): number {
+  return grade ? (FIT_RANK[grade] ?? 4) : 4;
+}
+
+// Parse a deadline for sorting: MM/DD/YYYY, YYYY-MM-DD, or "Month D, YYYY"
+// anywhere in the text. Unparseable ("Rolling", "") sorts last.
+function deadlineTime(s: string): number {
+  const str = (s || "").trim();
+  if (str) {
+    let m = str.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+    if (m) {
+      const t = Date.parse(`${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`);
+      if (!Number.isNaN(t)) return t;
+    }
+    m = str.match(/\b\d{4}-\d{2}-\d{2}\b/);
+    if (m) {
+      const t = Date.parse(m[0]);
+      if (!Number.isNaN(t)) return t;
+    }
+    m = str.match(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/);
+    if (m) {
+      const t = Date.parse(`${m[1]} ${m[2]}, ${m[3]}`);
+      if (!Number.isNaN(t)) return t;
+    }
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+type GradeFilter = "all" | "eligible" | "strong";
+type SortBy = "fit" | "deadline" | "new";
+
+function gradeOk(filter: GradeFilter, grade?: string): boolean {
+  if (filter === "all" || !grade) return true; // ungraded stays visible
+  if (filter === "strong") return grade === "strong_fit";
+  return grade === "strong_fit" || grade === "possible_fit";
+}
+
 export default function ScoutPanel({
   initialReport,
   initialKeywords,
   sources,
+  initialDismissed,
   saveKeywords,
   addSource,
   editSource,
@@ -36,6 +80,7 @@ export default function ScoutPanel({
   initialReport: ScoutReport | null;
   initialKeywords: string;
   sources: WatchSource[];
+  initialDismissed: { key: string; title: string }[];
   saveKeywords: (formData: FormData) => Promise<void>;
   addSource: (formData: FormData) => Promise<void>;
   editSource: (formData: FormData) => Promise<void>;
@@ -46,8 +91,48 @@ export default function ScoutPanel({
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<ScoutProgress | null>(null);
   const [error, setError] = useState("");
-  const [hideUnlikely, setHideUnlikely] = useState(true);
+  const [gradeFilter, setGradeFilter] = useState<GradeFilter>("eligible");
+  const [sortBy, setSortBy] = useState<SortBy>("fit");
   const [newOnly, setNewOnly] = useState(false);
+  const [dismissed, setDismissed] = useState(initialDismissed);
+
+  async function dismiss(payload: { number?: string; source?: string; title: string }) {
+    try {
+      const res = await fetch("/api/scout/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Dismiss failed");
+      const key: string = data.key;
+      setDismissed((list) => [{ key, title: payload.title }, ...list.filter((i) => i.key !== key)]);
+      setReport((r) => {
+        if (!r) return r;
+        const hits = r.hits.filter((h) => h.number !== key);
+        const watch = r.watch
+          ? { ...r.watch, findings: r.watch.findings.filter((f) => (f.key ?? "") !== key && !(f.source === payload.source && f.title === payload.title)) }
+          : r.watch;
+        return { ...r, hits, watch, totalFound: hits.length, newCount: hits.filter((h) => h.isNew).length };
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Dismiss failed");
+    }
+  }
+
+  async function restore(key: string) {
+    try {
+      const res = await fetch("/api/scout/dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, restore: true }),
+      });
+      if (!res.ok) throw new Error("Restore failed");
+      setDismissed((list) => list.filter((i) => i.key !== key));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Restore failed");
+    }
+  }
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -139,11 +224,38 @@ export default function ScoutPanel({
 
   const pct = progress && progress.total > 0 ? Math.round((progress.step / progress.total) * 100) : 0;
 
-  const visible: ScoutHit[] = (report?.hits ?? []).filter(
-    (h) =>
-      (!hideUnlikely || !h.grade || h.grade === "strong_fit" || h.grade === "possible_fit") &&
-      (!newOnly || h.isNew)
+  const sortHits = <T extends { grade?: string; isNew: boolean }>(
+    items: T[],
+    deadlineOf: (item: T) => string
+  ): T[] => {
+    const sorted = [...items];
+    if (sortBy === "deadline") {
+      sorted.sort(
+        (a, b) =>
+          deadlineTime(deadlineOf(a)) - deadlineTime(deadlineOf(b)) ||
+          fitRank(a.grade) - fitRank(b.grade)
+      );
+    } else if (sortBy === "new") {
+      sorted.sort((a, b) => Number(b.isNew) - Number(a.isNew) || fitRank(a.grade) - fitRank(b.grade));
+    } else {
+      sorted.sort(
+        (a, b) => fitRank(a.grade) - fitRank(b.grade) || Number(b.isNew) - Number(a.isNew)
+      );
+    }
+    return sorted;
+  };
+
+  const visible: ScoutHit[] = sortHits(
+    (report?.hits ?? []).filter((h) => gradeOk(gradeFilter, h.grade) && (!newOnly || h.isNew)),
+    (h) => h.closeDate
   );
+
+  const visibleFindings = report?.watch
+    ? sortHits(
+        report.watch.findings.filter((f) => gradeOk(gradeFilter, f.grade) && (!newOnly || f.isNew)),
+        (f) => f.deadline
+      )
+    : [];
 
   return (
     <div className="space-y-4">
@@ -161,8 +273,28 @@ export default function ScoutPanel({
           </span>
         )}
         <label className="flex items-center gap-1.5 text-xs text-gray-600">
-          <input type="checkbox" checked={hideUnlikely} onChange={(e) => setHideUnlikely(e.target.checked)} />
-          hide unlikely / not-eligible
+          Show
+          <select
+            value={gradeFilter}
+            onChange={(e) => setGradeFilter(e.target.value as GradeFilter)}
+            className="rounded border border-gray-300 px-1.5 py-1 text-xs bg-white"
+          >
+            <option value="eligible">strong + possible fit</option>
+            <option value="strong">strong fit only</option>
+            <option value="all">all grades</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+          Sort by
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as SortBy)}
+            className="rounded border border-gray-300 px-1.5 py-1 text-xs bg-white"
+          >
+            <option value="fit">best fit first</option>
+            <option value="deadline">deadline (soonest first)</option>
+            <option value="new">newest first</option>
+          </select>
         </label>
         <label className="flex items-center gap-1.5 text-xs text-gray-600">
           <input type="checkbox" checked={newOnly} onChange={(e) => setNewOnly(e.target.checked)} />
@@ -216,7 +348,7 @@ export default function ScoutPanel({
       {report && (
         <div className="card divide-y">
           {visible.length === 0 && (
-            <p className="p-4 text-sm text-gray-500">Nothing to show{hideUnlikely ? " (unlikely/not-eligible hidden)" : ""}.</p>
+            <p className="p-4 text-sm text-gray-500">Nothing to show{gradeFilter !== "all" ? " (lower grades hidden — switch Show to “all grades”)" : ""}.</p>
           )}
           {visible.map((h) => (
             <div key={h.number} className="p-3 flex items-center gap-3">
@@ -246,6 +378,13 @@ export default function ScoutPanel({
               >
                 + Pipeline
               </Link>
+              <button
+                onClick={() => dismiss({ number: h.number, title: h.title })}
+                className="shrink-0 rounded border border-gray-200 px-1.5 py-1 text-xs text-gray-400 hover:text-red-600 hover:border-red-300"
+                title="Dismiss — never show this grant again"
+              >
+                ✕
+              </button>
             </div>
           ))}
         </div>
@@ -262,14 +401,8 @@ export default function ScoutPanel({
           )}
           {report.watch.findings.length > 0 && (
             <div className="card divide-y">
-              {report.watch.findings
-                .filter(
-                  (f) =>
-                    (!hideUnlikely || !f.grade || f.grade === "strong_fit" || f.grade === "possible_fit") &&
-                    (!newOnly || f.isNew)
-                )
-                .map((f, i) => (
-                  <div key={i} className="p-3 flex items-center gap-3">
+              {visibleFindings.map((f, i) => (
+                  <div key={f.key || i} className="p-3 flex items-center gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         {f.isNew && (
@@ -297,6 +430,13 @@ export default function ScoutPanel({
                     >
                       + Pipeline
                     </Link>
+                    <button
+                      onClick={() => dismiss({ source: f.source, title: f.title })}
+                      className="shrink-0 rounded border border-gray-200 px-1.5 py-1 text-xs text-gray-400 hover:text-red-600 hover:border-red-300"
+                      title="Dismiss — never show this again"
+                    >
+                      ✕
+                    </button>
                   </div>
                 ))}
             </div>
@@ -318,6 +458,26 @@ export default function ScoutPanel({
             </div>
           </details>
         </div>
+      )}
+
+      {/* Dismissed grants */}
+      {dismissed.length > 0 && (
+        <details className="card">
+          <summary className="cursor-pointer p-3 text-sm font-medium text-gray-500">
+            Dismissed grants ({dismissed.length}) — hidden from all future runs
+          </summary>
+          <div className="px-4 pb-3 divide-y">
+            {dismissed.map((item) => (
+              <div key={item.key} className="py-2 flex items-center gap-2 text-sm">
+                <span className="flex-1 min-w-0 truncate text-gray-600">{item.title || item.key}</span>
+                <button onClick={() => restore(item.key)} className="btn-secondary text-xs shrink-0">
+                  restore
+                </button>
+              </div>
+            ))}
+            <p className="pt-2 text-xs text-gray-400">Restored grants reappear on the next scout run.</p>
+          </div>
+        </details>
       )}
 
       {/* Watched sources manager */}
