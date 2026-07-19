@@ -47,6 +47,7 @@ export default function ScoutPanel({
   const [progress, setProgress] = useState<ScoutProgress | null>(null);
   const [error, setError] = useState("");
   const [hideUnlikely, setHideUnlikely] = useState(true);
+  const [newOnly, setNewOnly] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -139,7 +140,9 @@ export default function ScoutPanel({
   const pct = progress && progress.total > 0 ? Math.round((progress.step / progress.total) * 100) : 0;
 
   const visible: ScoutHit[] = (report?.hits ?? []).filter(
-    (h) => !hideUnlikely || !h.grade || h.grade === "strong_fit" || h.grade === "possible_fit"
+    (h) =>
+      (!hideUnlikely || !h.grade || h.grade === "strong_fit" || h.grade === "possible_fit") &&
+      (!newOnly || h.isNew)
   );
 
   return (
@@ -160,6 +163,10 @@ export default function ScoutPanel({
         <label className="flex items-center gap-1.5 text-xs text-gray-600">
           <input type="checkbox" checked={hideUnlikely} onChange={(e) => setHideUnlikely(e.target.checked)} />
           hide unlikely / not-eligible
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+          <input type="checkbox" checked={newOnly} onChange={(e) => setNewOnly(e.target.checked)} />
+          new since last sweep only
         </label>
       </div>
       {running && (
@@ -256,7 +263,11 @@ export default function ScoutPanel({
           {report.watch.findings.length > 0 && (
             <div className="card divide-y">
               {report.watch.findings
-                .filter((f) => !hideUnlikely || !f.grade || f.grade === "strong_fit" || f.grade === "possible_fit")
+                .filter(
+                  (f) =>
+                    (!hideUnlikely || !f.grade || f.grade === "strong_fit" || f.grade === "possible_fit") &&
+                    (!newOnly || f.isNew)
+                )
                 .map((f, i) => (
                   <div key={i} className="p-3 flex items-center gap-3">
                     <div className="flex-1 min-w-0">
@@ -324,18 +335,21 @@ export default function ScoutPanel({
             {sources.map((s) => (
               <div key={s.id} className="py-2 flex items-center gap-2 text-sm">
                 <span className="text-[10px] text-gray-400 w-20 shrink-0">{KIND_LABEL[s.kind] ?? s.kind}</span>
-                <form action={editSource} className="flex-1 flex items-center gap-2 min-w-0">
+                <form
+                  action={editSource}
+                  className="flex-1 grid grid-cols-[minmax(8rem,13rem)_minmax(6rem,1fr)_auto_auto] gap-2 items-center min-w-0"
+                >
                   <input type="hidden" name="id" value={s.id} />
                   <input
                     name="name"
                     defaultValue={s.name}
-                    className={`input w-56 shrink-0 text-xs ${s.enabled ? "" : "text-gray-400 line-through"}`}
+                    className={`input text-xs ${s.enabled ? "" : "text-gray-400 line-through"}`}
                   />
-                  <input name="url" defaultValue={s.url} className="input flex-1 min-w-0 text-xs font-mono" />
-                  <a href={s.url} target="_blank" className="text-gray-400 hover:underline text-xs shrink-0" title="Open page">
+                  <input name="url" defaultValue={s.url} className="input text-xs font-mono" />
+                  <a href={s.url} target="_blank" className="text-gray-400 hover:underline text-xs" title="Open page">
                     ↗
                   </a>
-                  <button className="btn-secondary text-xs shrink-0" title="Save name/URL changes">save</button>
+                  <button className="btn-secondary text-xs" title="Save name/URL changes">save</button>
                 </form>
                 <form action={toggleSource}>
                   <input type="hidden" name="id" value={s.id} />
