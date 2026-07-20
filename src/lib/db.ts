@@ -148,6 +148,8 @@ function migrate(d: Database.Database) {
   const docCols = (d.prepare(`PRAGMA table_info(documents)`).all() as { name: string }[]).map((c) => c.name);
   if (!docCols.includes("content_text")) d.exec(`ALTER TABLE documents ADD COLUMN content_text TEXT DEFAULT ''`);
   if (!docCols.includes("file_name")) d.exec(`ALTER TABLE documents ADD COLUMN file_name TEXT DEFAULT ''`);
+  const oppCols = (d.prepare(`PRAGMA table_info(opportunities)`).all() as { name: string }[]).map((c) => c.name);
+  if (!oppCols.includes("sf424_json")) d.exec(`ALTER TABLE opportunities ADD COLUMN sf424_json TEXT DEFAULT ''`);
 
   // Default scout keywords (idempotent — safe on existing databases).
   d.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('scout_keywords', ?)`).run(
