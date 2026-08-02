@@ -1,5 +1,5 @@
 import { createOpportunity } from "@/lib/actions";
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +9,7 @@ export default async function NewOpportunity({
   searchParams: Promise<{ [k: string]: string | undefined }>;
 }) {
   const sp = await searchParams;
-  const funders = db().prepare(`SELECT name FROM funders ORDER BY tier, name`).all() as { name: string }[];
+  const funders = await q.all<{ name: string }>(`SELECT name FROM funders ORDER BY tier, name`);
 
   return (
     <div className="max-w-2xl space-y-4">

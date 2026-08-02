@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import {
   getFederalIdentity,
   saveFederalIdentity,
@@ -27,14 +27,12 @@ const money = (v: string) => {
 export default async function Sf424Page({ params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await params;
   const id = Number(idStr);
-  const opp = db()
-    .prepare(`SELECT id, name, funder_name, amount, grants_gov_number, sf424_json FROM opportunities WHERE id=?`)
-    .get(id) as
-    | { id: number; name: string; funder_name: string; amount: number; grants_gov_number: string; sf424_json: string }
-    | undefined;
+  const opp = await q.get<{
+    id: number; name: string; funder_name: string; amount: number; grants_gov_number: string; sf424_json: string;
+  }>(`SELECT id, name, funder_name, amount, grants_gov_number, sf424_json FROM opportunities WHERE id=?`, [id]);
   if (!opp) notFound();
 
-  const identity = getFederalIdentity();
+  const identity = await getFederalIdentity();
   const data = getSf424(opp, identity);
   const total = sf424Total(data);
   const today = new Date().toLocaleDateString("en-US");
@@ -44,7 +42,7 @@ export default async function Sf424Page({ params }: { params: Promise<{ id: stri
     const next = Object.fromEntries(
       IDENTITY_FIELDS.map((f) => [f.key, String(formData.get(f.key) ?? "")])
     ) as FederalIdentity;
-    saveFederalIdentity(next);
+    await saveFederalIdentity(next);
     revalidatePath(`/opportunities/${id}/sf424`);
   }
 
@@ -53,7 +51,7 @@ export default async function Sf424Page({ params }: { params: Promise<{ id: stri
     const next = Object.fromEntries(
       SF424_FIELDS.map((k) => [k, String(formData.get(k) ?? "")])
     ) as Sf424Data;
-    saveSf424(id, next);
+    await saveSf424(id, next);
     revalidatePath(`/opportunities/${id}/sf424`);
   }
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { getScreen } from "@/lib/eligibility";
 import EligibilityScreener from "@/components/EligibilityScreener";
 
@@ -9,11 +9,12 @@ export const dynamic = "force-dynamic";
 export default async function EligibilityPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await params;
   const id = Number(idStr);
-  const opp = db()
-    .prepare(`SELECT id, name, funder_name, nofo_text FROM opportunities WHERE id=?`)
-    .get(id) as { id: number; name: string; funder_name: string; nofo_text: string } | undefined;
+  const opp = await q.get<{ id: number; name: string; funder_name: string; nofo_text: string }>(
+    `SELECT id, name, funder_name, nofo_text FROM opportunities WHERE id=?`,
+    [id]
+  );
   if (!opp) notFound();
-  const screen = getScreen(id);
+  const screen = await getScreen(id);
 
   return (
     <div className="max-w-3xl space-y-4">

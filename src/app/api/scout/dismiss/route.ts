@@ -21,9 +21,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Provide key, number, or source+title" }, { status: 400 });
   }
   if (body.restore) {
-    restoreKeyed(key);
+    await restoreKeyed(key);
     return NextResponse.json({ ok: true, key, restored: true });
   }
-  dismissKeyed(key, String(body.title ?? ""));
+  await dismissKeyed(key, String(body.title ?? ""));
   return NextResponse.json({ ok: true, key });
 }

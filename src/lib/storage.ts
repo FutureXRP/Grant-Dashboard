@@ -59,6 +59,11 @@ export async function saveDocFile(
     if (error) throw new Error(`Supabase upload failed: ${error.message}`);
     return;
   }
+  if (process.env.VERCEL) {
+    throw new Error(
+      "Uploads on Vercel require Supabase Storage — set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the Vercel project's environment variables."
+    );
+  }
   const dir = path.join(UPLOADS_DIR, String(docId));
   fs.mkdirSync(dir, { recursive: true });
   if (previousFileName && previousFileName !== fileName) {

@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { q } from "./db";
 
 // SF-424 (Application for Federal Assistance) support.
 //
@@ -84,10 +84,8 @@ const EMPTY_IDENTITY: FederalIdentity = {
   eo12372: "Program is not covered by E.O. 12372.", federal_debt: "No",
 };
 
-export function getFederalIdentity(): FederalIdentity {
-  const row = db().prepare(`SELECT value FROM settings WHERE key='federal_identity'`).get() as
-    | { value: string }
-    | undefined;
+export async function getFederalIdentity(): Promise<FederalIdentity> {
+  const row = await q.get<{ value: string }>(`SELECT value FROM settings WHERE key='federal_identity'`);
   let saved: Partial<FederalIdentity> = {};
   try {
     saved = row?.value ? (JSON.parse(row.value) as Partial<FederalIdentity>) : {};
@@ -95,9 +93,9 @@ export function getFederalIdentity(): FederalIdentity {
     saved = {};
   }
   // Prefill legal name / EIN / UEI from the org profile the first time.
-  const profile = db().prepare(`SELECT name, ein, uei FROM org_profile WHERE id=1`).get() as
-    | { name: string; ein: string; uei: string }
-    | undefined;
+  const profile = await q.get<{ name: string; ein: string; uei: string }>(
+    `SELECT name, ein, uei FROM org_profile WHERE id=1`
+  );
   return {
     ...EMPTY_IDENTITY,
     legal_name: profile?.name ?? "",
@@ -107,12 +105,11 @@ export function getFederalIdentity(): FederalIdentity {
   } as FederalIdentity;
 }
 
-export function saveFederalIdentity(identity: FederalIdentity) {
-  db()
-    .prepare(
-      `INSERT INTO settings (key, value) VALUES ('federal_identity', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
-    )
-    .run(JSON.stringify(identity));
+export async function saveFederalIdentity(identity: FederalIdentity) {
+  await q.run(
+    `INSERT INTO settings (key, value) VALUES ('federal_identity', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    [JSON.stringify(identity)]
+  );
 }
 
 // Per-opportunity SF-424 values — the items that change with each application.
@@ -187,11 +184,11 @@ export function getSf424(opp: OppRow, identity: FederalIdentity): Sf424Data {
   } as Sf424Data;
 }
 
-export function saveSf424(oppId: number, data: Sf424Data) {
-  db().prepare(`UPDATE opportunities SET sf424_json=?, updated_at=datetime('now') WHERE id=?`).run(
+export async function saveSf424(oppId: number, data: Sf424Data) {
+  await q.run(`UPDATE opportunities SET sf424_json=?, updated_at=datetime('now') WHERE id=?`, [
     JSON.stringify(data),
-    oppId
-  );
+    oppId,
+  ]);
 }
 
 export function sf424Total(data: Sf424Data): number {

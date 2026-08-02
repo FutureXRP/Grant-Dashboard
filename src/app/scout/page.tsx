@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 async function saveKeywordsAction(formData: FormData) {
   "use server";
-  setKeywords(String(formData.get("keywords") || ""));
+  await setKeywords(String(formData.get("keywords") || ""));
   revalidatePath("/scout");
 }
 
@@ -14,7 +14,7 @@ async function addSourceAction(formData: FormData) {
   "use server";
   const name = String(formData.get("name") || "").trim();
   const url = String(formData.get("url") || "").trim();
-  if (name && url) addSource(name, url, String(formData.get("kind") || "state"));
+  if (name && url) await addSource(name, url, String(formData.get("kind") || "state"));
   revalidatePath("/scout");
 }
 
@@ -23,27 +23,27 @@ async function editSourceAction(formData: FormData) {
   const id = Number(formData.get("id"));
   const name = String(formData.get("name") || "").trim();
   const url = String(formData.get("url") || "").trim();
-  if (id && name && url) updateSource(id, name, url);
+  if (id && name && url) await updateSource(id, name, url);
   revalidatePath("/scout");
 }
 
 async function deleteSourceAction(formData: FormData) {
   "use server";
-  deleteSource(Number(formData.get("id")));
+  await deleteSource(Number(formData.get("id")));
   revalidatePath("/scout");
 }
 
 async function toggleSourceAction(formData: FormData) {
   "use server";
-  toggleSource(Number(formData.get("id")));
+  await toggleSource(Number(formData.get("id")));
   revalidatePath("/scout");
 }
 
-export default function ScoutPage() {
-  const report = latestReport();
-  const keywords = getKeywords().join("\n");
-  const sources = listSources();
-  const dismissed = listDismissed();
+export default async function ScoutPage() {
+  const report = await latestReport();
+  const keywords = (await getKeywords()).join("\n");
+  const sources = await listSources();
+  const dismissed = await listDismissed();
 
   return (
     <div className="space-y-4">

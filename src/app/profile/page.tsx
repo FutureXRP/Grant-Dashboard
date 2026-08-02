@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { saveProfile } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
@@ -8,8 +8,8 @@ type Profile = {
   service_area: string; populations: string; leadership: string; stats: string; ein: string; uei: string;
 };
 
-export default function ProfilePage() {
-  const p = db().prepare(`SELECT * FROM org_profile WHERE id=1`).get() as Profile;
+export default async function ProfilePage() {
+  const p = (await q.get<Profile>(`SELECT * FROM org_profile WHERE id=1`))!;
 
   const field = (name: keyof Profile, label: string, rows = 2, hint?: string) => (
     <div>

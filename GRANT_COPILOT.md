@@ -73,8 +73,43 @@ npm run build && npm start     # production
 - **Grants.gov search** calls the free public API directly — no key needed. (It's unreachable from
   some locked-down networks; the page reports the error rather than failing silently.)
 - **Deployment:** run it on any small Node host (a $5 VPS, an office machine, Render/Railway with a
-  persistent disk for `data/`). It has **no login system** — keep it on a private network, behind
-  your host's authentication, or on one trusted machine. Don't expose it to the open internet as-is.
+  persistent disk for `data/`) — or on **Vercel** (below). It has **no login system** — keep it on a
+  private network, behind your host's authentication, or on one trusted machine. Don't expose it to
+  the open internet as-is.
+
+## Deploying to Vercel
+
+Vercel's servers have no permanent disk, so the app stores its database in **Turso** (hosted
+SQLite, generous free tier) and uploaded documents in **Supabase Storage** when deployed there.
+Locally nothing changes — with no `TURSO_DATABASE_URL` set, the app keeps using the
+`data/grant-copilot.db` file exactly as before.
+
+One-time setup (~20 minutes):
+
+1. **Create the Turso database** — sign up at [turso.tech](https://turso.tech) (GitHub login works),
+   then in their web dashboard (or CLI) create a database named `grant-copilot`. Copy two things:
+   the **database URL** (`libsql://grant-copilot-….turso.io`) and an **auth token**.
+2. **Have Supabase Storage ready** (for document uploads): your Supabase project URL and
+   service_role key — same two values described under Running it. Uploads on Vercel require this;
+   there is no local-disk fallback there.
+3. **Import the repo on [vercel.com](https://vercel.com)** — Add New → Project → pick
+   `Grant-Dashboard`. Framework auto-detects as Next.js; no build settings needed.
+4. **Set the environment variables** (Project → Settings → Environment Variables):
+   `ANTHROPIC_API_KEY`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `SUPABASE_URL`,
+   `SUPABASE_SERVICE_ROLE_KEY`, and `CRON_SECRET` (any long random string — it locks the cron
+   endpoint so strangers can't trigger runs that spend AI credits).
+5. **Deploy.** The schema creates and seeds itself on the first page load. The included
+   `vercel.json` schedules the Grant Scout automatically every morning (12:00 UTC = 6–7 AM
+   Oklahoma time) via `/api/scout/cron` — no crontab needed. Every future `git push` to main
+   redeploys automatically.
+
+Notes for Vercel:
+- A long scout run is capped at 300 seconds there. With the default keyword/source list a run
+  fits; if you add many more sources and hit the cap, trim disabled sources or run twice daily.
+- The **no-login warning applies double** on a public URL. Until logins exist, enable Vercel's
+  built-in protection (Project → Settings → Deployment Protection) or keep the URL unshared.
+- Moving an existing local database into Turso: `turso db shell` can import a SQLite dump
+  (`sqlite3 data/grant-copilot.db .dump`), or simply start fresh and re-enter the profile.
 
 ## Troubleshooting
 

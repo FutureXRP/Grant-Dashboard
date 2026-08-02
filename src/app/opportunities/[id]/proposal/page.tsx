@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, ensureProposalSections } from "@/lib/db";
+import { q, ensureProposalSections } from "@/lib/db";
 import { PROPOSAL_SECTIONS } from "@/lib/stages";
 import { saveSection } from "@/lib/actions";
 import SectionEditor from "@/components/SectionEditor";
@@ -11,15 +11,16 @@ export const dynamic = "force-dynamic";
 export default async function ProposalWorkspace({ params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await params;
   const id = Number(idStr);
-  const d = db();
-  const opp = d.prepare(`SELECT id, name, funder_name, nofo_text FROM opportunities WHERE id=?`).get(id) as
-    | { id: number; name: string; funder_name: string; nofo_text: string }
-    | undefined;
+  const opp = await q.get<{ id: number; name: string; funder_name: string; nofo_text: string }>(
+    `SELECT id, name, funder_name, nofo_text FROM opportunities WHERE id=?`,
+    [id]
+  );
   if (!opp) notFound();
-  ensureProposalSections(id);
-  const rows = d
-    .prepare(`SELECT section_key, content FROM proposal_sections WHERE opportunity_id=?`)
-    .all(id) as { section_key: string; content: string }[];
+  await ensureProposalSections(id);
+  const rows = await q.all<{ section_key: string; content: string }>(
+    `SELECT section_key, content FROM proposal_sections WHERE opportunity_id=?`,
+    [id]
+  );
   const contentByKey = Object.fromEntries(rows.map((r) => [r.section_key, r.content]));
 
   return (

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { saveDocFile, supabaseConfigured } from "@/lib/storage";
 
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB
@@ -20,10 +20,10 @@ export async function POST(req: NextRequest) {
   if (file.size > MAX_BYTES) {
     return NextResponse.json({ error: "File too large (25 MB max)" }, { status: 413 });
   }
-  const d = db();
-  const doc = d.prepare(`SELECT id, file_name, status FROM documents WHERE id=?`).get(id) as
-    | { id: number; file_name: string; status: string }
-    | undefined;
+  const doc = await q.get<{ id: number; file_name: string; status: string }>(
+    `SELECT id, file_name, status FROM documents WHERE id=?`,
+    [id]
+  );
   if (!doc) return NextResponse.json({ error: "Document not found" }, { status: 404 });
 
   const safeName = path.basename(file.name).replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "upload";
@@ -33,8 +33,9 @@ export async function POST(req: NextRequest) {
     const message = err instanceof Error ? err.message : "Storage write failed";
     return NextResponse.json({ error: message }, { status: 502 });
   }
-  d.prepare(
-    `UPDATE documents SET file_name=?, status = CASE WHEN status='missing' THEN 'current' ELSE status END, updated_at=datetime('now') WHERE id=?`
-  ).run(safeName, id);
+  await q.run(
+    `UPDATE documents SET file_name=?, status = CASE WHEN status='missing' THEN 'current' ELSE status END, updated_at=datetime('now') WHERE id=?`,
+    [safeName, id]
+  );
   return NextResponse.json({ ok: true, file_name: safeName, storage: supabaseConfigured() ? "supabase" : "local" });
 }

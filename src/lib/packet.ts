@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { db } from "./db";
+import { q } from "./db";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 
@@ -53,18 +53,16 @@ Rules:
 - The summary is 2-3 sentences: how ready this packet is and the single most urgent gap.`;
 
 export async function buildPacket(opportunityId: number): Promise<Packet> {
-  const d = db();
-  const opp = d.prepare(`SELECT * FROM opportunities WHERE id=?`).get(opportunityId) as
-    | { id: number; name: string; funder_name: string; type: string; nofo_text: string }
-    | undefined;
+  const opp = await q.get<{ id: number; name: string; funder_name: string; type: string; nofo_text: string }>(
+    `SELECT * FROM opportunities WHERE id=?`,
+    [opportunityId]
+  );
   if (!opp) throw new Error("Opportunity not found");
 
-  const docs = d
-    .prepare(`SELECT id, name, category, status, expires, notes, file_name, content_text FROM documents ORDER BY category, name`)
-    .all() as {
+  const docs = await q.all<{
     id: number; name: string; category: string; status: string; expires: string;
     notes: string; file_name: string; content_text: string;
-  }[];
+  }>(`SELECT id, name, category, status, expires, notes, file_name, content_text FROM documents ORDER BY category, name`);
   const today = new Date().toISOString().slice(0, 10);
   const docList = docs
     .map(
@@ -98,16 +96,17 @@ Build the attachment packet.`;
   if (!text) throw new Error("Empty response from model");
   const parsed = JSON.parse(text) as Omit<Packet, "builtAt">;
   const packet: Packet = { ...parsed, builtAt: new Date().toISOString() };
-  d.prepare(
+  await q.run(
     `INSERT INTO opportunity_packets (opportunity_id, packet, updated_at) VALUES (?, ?, datetime('now'))
-     ON CONFLICT(opportunity_id) DO UPDATE SET packet=excluded.packet, updated_at=datetime('now')`
-  ).run(opportunityId, JSON.stringify(packet));
+     ON CONFLICT(opportunity_id) DO UPDATE SET packet=excluded.packet, updated_at=datetime('now')`,
+    [opportunityId, JSON.stringify(packet)]
+  );
   return packet;
 }
 
-export function getPacket(opportunityId: number): Packet | null {
-  const row = db().prepare(`SELECT packet FROM opportunity_packets WHERE opportunity_id=?`).get(opportunityId) as
-    | { packet: string }
-    | undefined;
+export async function getPacket(opportunityId: number): Promise<Packet | null> {
+  const row = await q.get<{ packet: string }>(`SELECT packet FROM opportunity_packets WHERE opportunity_id=?`, [
+    opportunityId,
+  ]);
   return row?.packet ? (JSON.parse(row.packet) as Packet) : null;
 }

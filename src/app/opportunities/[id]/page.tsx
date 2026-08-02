@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db, ensureProposalSections } from "@/lib/db";
+import { q, ensureProposalSections } from "@/lib/db";
 import { STAGES, QUAL_CRITERIA, qualTotal, fmtMoney, daysUntil, deadlineColor } from "@/lib/stages";
 import {
   updateOpportunity, setStage, deleteOpportunity, saveQualScores,
@@ -23,18 +23,18 @@ type Task = { id: number; title: string; due: string; done: number };
 export default async function OpportunityDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id: idStr } = await params;
   const id = Number(idStr);
-  const d = db();
-  const opp = d.prepare(`SELECT * FROM opportunities WHERE id=?`).get(id) as Opp | undefined;
+  const opp = await q.get<Opp>(`SELECT * FROM opportunities WHERE id=?`, [id]);
   if (!opp) notFound();
-  ensureProposalSections(id);
-  const tasks = d.prepare(`SELECT * FROM tasks WHERE opportunity_id=? ORDER BY done, id`).all(id) as Task[];
-  const screenRow = d
-    .prepare(`SELECT verdict FROM eligibility_screens WHERE opportunity_id=?`)
-    .get(id) as { verdict: string } | undefined;
+  await ensureProposalSections(id);
+  const tasks = await q.all<Task>(`SELECT * FROM tasks WHERE opportunity_id=? ORDER BY done, id`, [id]);
+  const screenRow = await q.get<{ verdict: string }>(
+    `SELECT verdict FROM eligibility_screens WHERE opportunity_id=?`,
+    [id]
+  );
   const screenVerdict: string | null = screenRow?.verdict
     ? (JSON.parse(screenRow.verdict).verdict as string)
     : null;
-  const packet = getPacket(id);
+  const packet = await getPacket(id);
   const scores: Record<string, number> = JSON.parse(opp.qual_scores || "{}");
   const total = qualTotal(scores);
   const days = daysUntil(opp.deadline);

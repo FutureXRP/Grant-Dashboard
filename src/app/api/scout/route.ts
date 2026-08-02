@@ -16,5 +16,5 @@ export async function POST() {
 
 // GET = latest saved report.
 export async function GET() {
-  return NextResponse.json({ report: latestReport() });
+  return NextResponse.json({ report: await latestReport() });
 }

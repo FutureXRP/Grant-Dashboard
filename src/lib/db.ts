@@ -1,28 +1,139 @@
-import Database from "better-sqlite3";
 import path from "path";
-import fs from "fs";
 import { SEED_FUNDERS, SEED_READINESS, SEED_DOCUMENTS, SEED_NARRATIVES, SEED_PROFILE } from "./seed";
 import { PROPOSAL_SECTIONS } from "./stages";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "grant-copilot.db");
+// Async database layer with two interchangeable backends:
+//
+//  - LOCAL (default): better-sqlite3 against data/grant-copilot.db — used on a
+//    laptop, Codespace, or any host with a persistent disk.
+//  - REMOTE: Turso (hosted SQLite) via @libsql/client/web when
+//    TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set — used on Vercel and other
+//    serverless hosts, whose filesystems are wiped on every deploy.
+//
+// Both speak the same SQLite dialect, so every query in the app is written
+// once. All access goes through q.get / q.all / q.run (async).
+
+export const DATA_DIR = path.join(process.cwd(), "data");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 
-let _db: Database.Database | null = null;
+type Params = unknown[] | Record<string, unknown>;
+export type RunResult = { lastInsertRowid: number };
 
-export function db(): Database.Database {
-  if (_db) return _db;
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const fresh = !fs.existsSync(DB_PATH);
-  _db = new Database(DB_PATH);
-  _db.pragma("journal_mode = WAL");
-  migrate(_db);
-  if (fresh) seed(_db);
-  return _db;
+type Backend = {
+  get<T>(sql: string, params?: Params): Promise<T | undefined>;
+  all<T>(sql: string, params?: Params): Promise<T[]>;
+  run(sql: string, params?: Params): Promise<RunResult>;
+  batch(sql: string): Promise<void>; // multi-statement DDL
+};
+
+function remoteConfigured(): boolean {
+  return Boolean(process.env.TURSO_DATABASE_URL);
 }
 
-function migrate(d: Database.Database) {
-  d.exec(`
+// ---- local backend (better-sqlite3) ----
+
+function localBackend(): Backend {
+  if (process.env.VERCEL) {
+    throw new Error(
+      "Running on Vercel without a cloud database — Vercel has no persistent disk. " +
+        "Create a free Turso database and set TURSO_DATABASE_URL and TURSO_AUTH_TOKEN " +
+        "in the Vercel project's environment variables (see GRANT_COPILOT.md → Deploying to Vercel)."
+    );
+  }
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const Database = require("better-sqlite3") as typeof import("better-sqlite3");
+  const fs = require("fs") as typeof import("fs");
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const d = new Database(path.join(DATA_DIR, "grant-copilot.db"));
+  d.pragma("journal_mode = WAL");
+  return {
+    async get<T>(sql: string, params: Params = []) {
+      const stmt = d.prepare(sql);
+      return (Array.isArray(params) ? stmt.get(...params) : stmt.get(params)) as T | undefined;
+    },
+    async all<T>(sql: string, params: Params = []) {
+      const stmt = d.prepare(sql);
+      return (Array.isArray(params) ? stmt.all(...params) : stmt.all(params)) as T[];
+    },
+    async run(sql: string, params: Params = []) {
+      const stmt = d.prepare(sql);
+      const r = Array.isArray(params) ? stmt.run(...params) : stmt.run(params);
+      return { lastInsertRowid: Number(r.lastInsertRowid) };
+    },
+    async batch(sql: string) {
+      d.exec(sql);
+    },
+  };
+}
+
+// ---- remote backend (Turso over HTTP — no native code, serverless-safe) ----
+
+function remoteBackend(): Backend {
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const { createClient } = require("@libsql/client/web") as typeof import("@libsql/client/web");
+  /* eslint-enable @typescript-eslint/no-require-imports */
+  const client = createClient({
+    url: process.env.TURSO_DATABASE_URL!,
+    authToken: process.env.TURSO_AUTH_TOKEN,
+  });
+  const toArgs = (params: Params) =>
+    Array.isArray(params)
+      ? (params as (string | number | null)[])
+      : (params as Record<string, string | number | null>);
+  const toRow = <T>(r: Record<string, unknown>): T => r as T;
+  return {
+    async get<T>(sql: string, params: Params = []) {
+      const rs = await client.execute({ sql, args: toArgs(params) });
+      return rs.rows[0] ? toRow<T>(rs.rows[0] as unknown as Record<string, unknown>) : undefined;
+    },
+    async all<T>(sql: string, params: Params = []) {
+      const rs = await client.execute({ sql, args: toArgs(params) });
+      return rs.rows.map((r) => toRow<T>(r as unknown as Record<string, unknown>));
+    },
+    async run(sql: string, params: Params = []) {
+      const rs = await client.execute({ sql, args: toArgs(params) });
+      return { lastInsertRowid: rs.lastInsertRowid ? Number(rs.lastInsertRowid) : 0 };
+    },
+    async batch(sql: string) {
+      await client.executeMultiple(sql);
+    },
+  };
+}
+
+// ---- initialization: migrate (+ seed if empty) exactly once per process ----
+
+let backend: Backend | null = null;
+let ready: Promise<void> | null = null;
+
+function raw(): Backend {
+  if (!backend) backend = remoteConfigured() ? remoteBackend() : localBackend();
+  return backend;
+}
+
+async function init(): Promise<void> {
+  const b = raw();
+  await migrate(b);
+  const existing = await b.get<{ id: number }>(`SELECT id FROM org_profile WHERE id=1`);
+  if (!existing) await seed(b);
+}
+
+async function withReady<T>(fn: (b: Backend) => Promise<T>): Promise<T> {
+  if (!ready) ready = init().catch((e) => { ready = null; throw e; });
+  await ready;
+  return fn(raw());
+}
+
+export const q = {
+  get: <T>(sql: string, params?: Params) => withReady((b) => b.get<T>(sql, params)),
+  all: <T>(sql: string, params?: Params) => withReady((b) => b.all<T>(sql, params)),
+  run: (sql: string, params?: Params) => withReady((b) => b.run(sql, params)),
+};
+
+// ---- schema ----
+
+async function migrate(b: Backend) {
+  await b.batch(`
   CREATE TABLE IF NOT EXISTS org_profile (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     name TEXT, legal_status TEXT, mission TEXT, vision TEXT, programs TEXT,
@@ -144,15 +255,23 @@ function migrate(d: Database.Database) {
     last_checked TEXT DEFAULT ''
   );
   `);
-  // Column migrations for existing databases (SQLite has no IF NOT EXISTS for columns).
-  const docCols = (d.prepare(`PRAGMA table_info(documents)`).all() as { name: string }[]).map((c) => c.name);
-  if (!docCols.includes("content_text")) d.exec(`ALTER TABLE documents ADD COLUMN content_text TEXT DEFAULT ''`);
-  if (!docCols.includes("file_name")) d.exec(`ALTER TABLE documents ADD COLUMN file_name TEXT DEFAULT ''`);
-  const oppCols = (d.prepare(`PRAGMA table_info(opportunities)`).all() as { name: string }[]).map((c) => c.name);
-  if (!oppCols.includes("sf424_json")) d.exec(`ALTER TABLE opportunities ADD COLUMN sf424_json TEXT DEFAULT ''`);
+
+  // Column migrations for databases created before these columns existed.
+  // "ADD COLUMN, ignore the duplicate-column error" works identically on both
+  // backends, unlike PRAGMA table_info over HTTP.
+  const addColumn = async (sql: string) => {
+    try {
+      await b.run(sql);
+    } catch {
+      /* column already exists */
+    }
+  };
+  await addColumn(`ALTER TABLE documents ADD COLUMN content_text TEXT DEFAULT ''`);
+  await addColumn(`ALTER TABLE documents ADD COLUMN file_name TEXT DEFAULT ''`);
+  await addColumn(`ALTER TABLE opportunities ADD COLUMN sf424_json TEXT DEFAULT ''`);
 
   // Default scout keywords (idempotent — safe on existing databases).
-  d.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('scout_keywords', ?)`).run(
+  await b.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('scout_keywords', ?)`, [
     [
       "community health",
       "early childhood education",
@@ -162,14 +281,10 @@ function migrate(d: Database.Database) {
       "family support services",
       "childcare facilities",
       "youth development",
-    ].join("\n")
-  );
+    ].join("\n"),
+  ]);
+
   // Starter watch list for the state/foundation page watcher (Sections 5-6 funders).
-  // These URLs are a best-effort starting point — sites reorganize, so any source
-  // that errors in the morning report should be re-pointed via the Scout page.
-  const insSource = d.prepare(
-    `INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`
-  );
   const sources: [string, string, string][] = [
     ["Oklahoma State Dept. of Health — grants & procurement", "https://oklahoma.gov/health/about-us/procurement---grants-management.html", "state"],
     ["ODMHSAS — procurement & funding", "https://oklahoma.gov/odmhsas/about/procurement-and-contracts.html", "state"],
@@ -187,37 +302,22 @@ function migrate(d: Database.Database) {
     ["First Nations Development Institute — grantmaking", "https://www.firstnations.org/grantmaking/", "native"],
     ["Native American Agriculture Fund", "https://nativeamericanagriculturefund.org/", "native"],
   ];
-  for (const s of sources) insSource.run(...s);
+  for (const s of sources) {
+    await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, s);
+  }
 
   // One-time keyword upgrade for existing databases: add Native-focused keywords.
-  const flag = d.prepare(`SELECT value FROM settings WHERE key='seed_native_keywords'`).get() as
-    | { value: string }
-    | undefined;
+  const flag = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_native_keywords'`);
   if (!flag) {
-    const row = d.prepare(`SELECT value FROM settings WHERE key='scout_keywords'`).get() as
-      | { value: string }
-      | undefined;
-    const current = (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
-    for (const kw of ["Native American families", "tribal health", "American Indian communities"]) {
-      if (!current.some((c) => c.toLowerCase() === kw.toLowerCase())) current.push(kw);
-    }
-    d.prepare(
-      `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
-    ).run(current.join("\n"));
-    d.prepare(`INSERT INTO settings (key, value) VALUES ('seed_native_keywords', 'done')`).run();
+    await addKeywords(b, ["Native American families", "tribal health", "American Indian communities"]);
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_native_keywords', 'done')`);
   }
 
   // One-time keyword upgrade v3: program-specific phrases that match how federal
   // notices are actually worded (existing user keywords are preserved).
-  const flag3 = d.prepare(`SELECT value FROM settings WHERE key='seed_keywords_v3'`).get() as
-    | { value: string }
-    | undefined;
+  const flag3 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_keywords_v3'`);
   if (!flag3) {
-    const row = d.prepare(`SELECT value FROM settings WHERE key='scout_keywords'`).get() as
-      | { value: string }
-      | undefined;
-    const current = (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
-    for (const kw of [
+    await addKeywords(b, [
       "maternal and child health",
       "telehealth",
       "community health workers",
@@ -229,26 +329,15 @@ function migrate(d: Database.Database) {
       "trauma-informed",
       "suicide prevention",
       "fatherhood",
-    ]) {
-      if (!current.some((c) => c.toLowerCase() === kw.toLowerCase())) current.push(kw);
-    }
-    d.prepare(
-      `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
-    ).run(current.join("\n"));
-    d.prepare(`INSERT INTO settings (key, value) VALUES ('seed_keywords_v3', 'done')`).run();
+    ]);
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_keywords_v3', 'done')`);
   }
 
   // One-time upgrade v4: food-security and outdoor-recreation lanes
   // (food distribution / commercial kitchen; playground, splashpad, walking track).
-  const flag4 = d.prepare(`SELECT value FROM settings WHERE key='seed_v4_food_rec'`).get() as
-    | { value: string }
-    | undefined;
+  const flag4 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v4_food_rec'`);
   if (!flag4) {
-    const row = d.prepare(`SELECT value FROM settings WHERE key='scout_keywords'`).get() as
-      | { value: string }
-      | undefined;
-    const current = (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
-    for (const kw of [
+    await addKeywords(b, [
       "food security",
       "food access",
       "community food projects",
@@ -257,14 +346,7 @@ function migrate(d: Database.Database) {
       "outdoor recreation",
       "physical activity",
       "playground",
-    ]) {
-      if (!current.some((c) => c.toLowerCase() === kw.toLowerCase())) current.push(kw);
-    }
-    d.prepare(
-      `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`
-    ).run(current.join("\n"));
-
-    const insSrc = d.prepare(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`);
+    ]);
     const newSources: [string, string, string][] = [
       ["KABOOM! — playground grants", "https://kaboom.org/grants", "foundation"],
       ["AARP Community Challenge (walkability/parks quick-builds)", "https://www.aarp.org/livable-communities/community-challenge/", "foundation"],
@@ -272,11 +354,9 @@ function migrate(d: Database.Database) {
       ["Community Food Bank of Eastern Oklahoma", "https://okfoodbank.org/", "foundation"],
       ["Oklahoma Tourism & Recreation — grants (LWCF)", "https://www.travelok.com/grants", "state"],
     ];
-    for (const s of newSources) insSrc.run(...s);
-
-    const insFunder2 = d.prepare(
-      `INSERT INTO funders (name, type, tier, focus, award_range, projects, website) VALUES (@name, @type, @tier, @focus, @award_range, @projects, @website)`
-    );
+    for (const s of newSources) {
+      await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, s);
+    }
     const newFunders = [
       { name: "Tulsa County CDBG (Oakhurst is unincorporated Tulsa County)", type: "state", tier: 1, focus: "Community Development Block Grants for low/moderate-income areas — public facilities, parks, playgrounds, sidewalks, community centers", award_range: "$50K – $500K", projects: "Playground, splashpad, walking track restoration, food distribution buildout — verify Oakhurst census-tract LMI qualification", website: "https://www.tulsacounty.org" },
       { name: "Land & Water Conservation Fund (via Oklahoma Tourism & Recreation)", type: "state", tier: 2, focus: "Outdoor recreation capital: parks, playgrounds, splash pads, trails — typically 50% match required", award_range: "$75K – $500K (50% match)", projects: "Playground + splashpad + walking track as one outdoor recreation project on the 10 acres", website: "https://www.travelok.com" },
@@ -287,39 +367,50 @@ function migrate(d: Database.Database) {
       { name: "AARP Community Challenge", type: "foundation", tier: 2, focus: "Quick-turn quality-of-life projects: walkability, parks, public spaces (annual cycle, all ages benefit)", award_range: "$2.5K – $50K", projects: "Walking track restoration as an intergenerational fitness loop", website: "https://www.aarp.org/livable-communities/community-challenge/" },
       { name: "T-Mobile Hometown Grants", type: "corporate", tier: 2, focus: "Small-town community-space projects (towns under 50K)", award_range: "Up to $50K", projects: "Outdoor community space / track / playground elements", website: "https://www.t-mobile.com/brand/hometown-grants" },
     ];
-    for (const f of newFunders) insFunder2.run(f);
-
-    d.prepare(`INSERT INTO settings (key, value) VALUES ('seed_v4_food_rec', 'done')`).run();
+    for (const f of newFunders) {
+      await b.run(
+        `INSERT INTO funders (name, type, tier, focus, award_range, projects, website) VALUES (@name, @type, @tier, @focus, @award_range, @projects, @website)`,
+        f
+      );
+    }
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v4_food_rec', 'done')`);
   }
 }
 
-function seed(d: Database.Database) {
-  const insProfile = d.prepare(
+async function addKeywords(b: Backend, keywords: string[]) {
+  const row = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='scout_keywords'`);
+  const current = (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+  for (const kw of keywords) {
+    if (!current.some((c) => c.toLowerCase() === kw.toLowerCase())) current.push(kw);
+  }
+  await b.run(
+    `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    [current.join("\n")]
+  );
+}
+
+async function seed(b: Backend) {
+  await b.run(
     `INSERT INTO org_profile (id, name, legal_status, mission, vision, programs, service_area, populations, leadership, stats, ein, uei)
-     VALUES (1, @name, @legal_status, @mission, @vision, @programs, @service_area, @populations, @leadership, @stats, @ein, @uei)`
+     VALUES (1, @name, @legal_status, @mission, @vision, @programs, @service_area, @populations, @leadership, @stats, @ein, @uei)`,
+    SEED_PROFILE as unknown as Record<string, unknown>
   );
-  insProfile.run(SEED_PROFILE);
-
-  const insFunder = d.prepare(
-    `INSERT INTO funders (name, type, tier, focus, award_range, projects, website)
-     VALUES (@name, @type, @tier, @focus, @award_range, @projects, @website)`
-  );
-  for (const f of SEED_FUNDERS) insFunder.run(f);
-
-  const insReady = d.prepare(
-    `INSERT INTO readiness (item, category, detail) VALUES (@item, @category, @detail)`
-  );
-  for (const r of SEED_READINESS) insReady.run(r);
-
-  const insDoc = d.prepare(
-    `INSERT INTO documents (name, category) VALUES (@name, @category)`
-  );
-  for (const doc of SEED_DOCUMENTS) insDoc.run(doc);
-
-  const insNarr = d.prepare(
-    `INSERT INTO narratives (category, title, content) VALUES (@category, @title, @content)`
-  );
-  for (const n of SEED_NARRATIVES) insNarr.run(n);
+  for (const f of SEED_FUNDERS) {
+    await b.run(
+      `INSERT INTO funders (name, type, tier, focus, award_range, projects, website)
+       VALUES (@name, @type, @tier, @focus, @award_range, @projects, @website)`,
+      f as unknown as Record<string, unknown>
+    );
+  }
+  for (const r of SEED_READINESS) {
+    await b.run(`INSERT INTO readiness (item, category, detail) VALUES (@item, @category, @detail)`, r as unknown as Record<string, unknown>);
+  }
+  for (const doc of SEED_DOCUMENTS) {
+    await b.run(`INSERT INTO documents (name, category) VALUES (@name, @category)`, doc as unknown as Record<string, unknown>);
+  }
+  for (const n of SEED_NARRATIVES) {
+    await b.run(`INSERT INTO narratives (category, title, content) VALUES (@category, @title, @content)`, n as unknown as Record<string, unknown>);
+  }
 }
 
 // Default tasks generated for every new opportunity (Section 2 task list).
@@ -338,10 +429,11 @@ export const DEFAULT_TASKS = [
   "Calendar reporting deadlines",
 ];
 
-export function ensureProposalSections(opportunityId: number) {
-  const d = db();
-  const ins = d.prepare(
-    `INSERT OR IGNORE INTO proposal_sections (opportunity_id, section_key) VALUES (?, ?)`
-  );
-  for (const s of PROPOSAL_SECTIONS) ins.run(opportunityId, s.key);
+export async function ensureProposalSections(opportunityId: number) {
+  for (const s of PROPOSAL_SECTIONS) {
+    await q.run(`INSERT OR IGNORE INTO proposal_sections (opportunity_id, section_key) VALUES (?, ?)`, [
+      opportunityId,
+      s.key,
+    ]);
+  }
 }

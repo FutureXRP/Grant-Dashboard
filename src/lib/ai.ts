@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { db } from "./db";
+import { q } from "./db";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 
@@ -17,11 +17,11 @@ type ProfileRow = {
   leadership: string; stats: string;
 };
 
-function orgContext(): string {
-  const p = db().prepare(`SELECT * FROM org_profile WHERE id=1`).get() as ProfileRow;
-  const narratives = db()
-    .prepare(`SELECT category, title, content FROM narratives ORDER BY category`)
-    .all() as { category: string; title: string; content: string }[];
+async function orgContext(): Promise<string> {
+  const p = (await q.get<ProfileRow>(`SELECT * FROM org_profile WHERE id=1`))!;
+  const narratives = await q.all<{ category: string; title: string; content: string }>(
+    `SELECT category, title, content FROM narratives ORDER BY category`
+  );
   const narrText = narratives
     .map((n) => `### ${n.category} — ${n.title}\n${n.content}`)
     .join("\n\n");
@@ -79,8 +79,7 @@ export async function runAgent(
     targetWords?: number;
   }
 ): Promise<string> {
-  const d = db();
-  const system = `${GUARDRAILS}\n\n${orgContext()}`;
+  const system = `${GUARDRAILS}\n\n${await orgContext()}`;
 
   type OppRow = {
     id: number; name: string; funder_name: string; type: string;
@@ -88,7 +87,7 @@ export async function runAgent(
   };
   let opp: OppRow | null = null;
   if (input.opportunityId) {
-    opp = (d.prepare(`SELECT * FROM opportunities WHERE id=?`).get(input.opportunityId) as OppRow | undefined) ?? null;
+    opp = (await q.get<OppRow>(`SELECT * FROM opportunities WHERE id=?`, [input.opportunityId])) ?? null;
   }
   const oppContext = opp
     ? `# Current Opportunity\nGrant: ${opp.name}\nFunder: ${opp.funder_name}\nType: ${opp.type}\nAmount sought: $${opp.amount?.toLocaleString()}\nDeadline: ${opp.deadline}\nEligibility notes: ${opp.eligibility_notes}\n\n# NOFO / Guidelines Text\n${opp.nofo_text ? opp.nofo_text.slice(0, 150000) : "(none pasted yet)"}`
@@ -125,21 +124,19 @@ If no NOFO text has been pasted, say so and analyze from the opportunity metadat
       user = `${oppContext}\n\nBased on this text (and the NOFO if available), write 3–5 SMART objectives using the template: "By the end of the project period, [population] will achieve [measurable result], as measured by [evaluation method], within [timeframe]." Where a baseline or target number is unknown, use a [VERIFY: ...] placeholder rather than inventing one.\n\n---\n${input.text || "(no draft provided — derive objectives from the opportunity and organization profile)"}`;
       break;
     case "red_team": {
-      const sections = d
-        .prepare(
-          `SELECT ps.section_key, ps.content FROM proposal_sections ps WHERE ps.opportunity_id=? AND ps.content != ''`
-        )
-        .all(input.opportunityId) as { section_key: string; content: string }[];
+      const sections = await q.all<{ section_key: string; content: string }>(
+        `SELECT ps.section_key, ps.content FROM proposal_sections ps WHERE ps.opportunity_id=? AND ps.content != ''`,
+        [input.opportunityId]
+      );
       const proposal = sections.map((s) => `## ${s.section_key}\n${s.content}`).join("\n\n");
       user = `${oppContext}\n\nAct as a skeptical federal grant reviewer scoring this proposal against the published criteria (or standard federal criteria if none are available: need, program design, organizational capacity, evaluation, budget, sustainability). For each area: score 1–10, quote the weakest passages, and state exactly what a competitive proposal would say instead. Report every issue you find, including ones you are uncertain about — coverage over politeness. End with the three changes that would most improve the score.\n\n# Proposal Draft\n${proposal || "(no sections drafted yet)"}`;
       break;
     }
     case "compliance_check": {
-      const sections = d
-        .prepare(
-          `SELECT ps.section_key, ps.content FROM proposal_sections ps WHERE ps.opportunity_id=? AND ps.content != ''`
-        )
-        .all(input.opportunityId) as { section_key: string; content: string }[];
+      const sections = await q.all<{ section_key: string; content: string }>(
+        `SELECT ps.section_key, ps.content FROM proposal_sections ps WHERE ps.opportunity_id=? AND ps.content != ''`,
+        [input.opportunityId]
+      );
       const proposal = sections.map((s) => `## ${s.section_key}\n${s.content}`).join("\n\n");
       user = `${oppContext}\n\nBuild a compliance checklist from the NOFO (every required element, section, attachment, format rule, and page/word limit), then check the draft against it. Output a markdown table: Requirement | Where required | Status (✅ met / ⚠️ partial / ❌ missing) | What to fix. Flag any unverified-statistics placeholders still in the draft as blockers.\n\n# Proposal Draft\n${proposal || "(no sections drafted yet)"}`;
       break;
@@ -147,10 +144,10 @@ If no NOFO text has been pasted, say so and analyze from the opportunity metadat
   }
 
   const output = await run(system, user, action === "analyze_nofo" || action === "red_team" ? 16000 : 8000);
-  d.prepare(`INSERT INTO ai_runs (opportunity_id, agent, output) VALUES (?, ?, ?)`).run(
+  await q.run(`INSERT INTO ai_runs (opportunity_id, agent, output) VALUES (?, ?, ?)`, [
     input.opportunityId ?? null,
     action,
-    output
-  );
+    output,
+  ]);
   return output;
 }

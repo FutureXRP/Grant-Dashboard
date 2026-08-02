@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { STAGES, stageByKey, fmtMoney, daysUntil, deadlineColor } from "@/lib/stages";
 
 export const dynamic = "force-dynamic";
@@ -9,9 +9,8 @@ type Opp = {
   amount: number; deadline: string; report_due: string; renewal: number; awarded_amount: number;
 };
 
-export default function Dashboard() {
-  const d = db();
-  const opps = d.prepare(`SELECT * FROM opportunities ORDER BY deadline = '', deadline`).all() as Opp[];
+export default async function Dashboard() {
+  const opps = await q.all<Opp>(`SELECT * FROM opportunities ORDER BY deadline = '', deadline`);
 
   const active = opps.filter((o) => stageByKey(o.stage).preAward);
   const awarded = opps.filter((o) => o.stage === "awarded" || o.stage === "reporting");
@@ -36,7 +35,7 @@ export default function Dashboard() {
 
   const renewals = opps.filter((o) => o.renewal === 1);
 
-  const readiness = d.prepare(`SELECT status, COUNT(*) n FROM readiness GROUP BY status`).all() as { status: string; n: number }[];
+  const readiness = await q.all<{ status: string; n: number }>(`SELECT status, COUNT(*) n FROM readiness GROUP BY status`);
   const readyCount = readiness.find((r) => r.status === "ready")?.n ?? 0;
   const readyTotal = readiness.reduce((s, r) => s + r.n, 0);
 

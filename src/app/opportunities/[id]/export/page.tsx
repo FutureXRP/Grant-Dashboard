@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { PROPOSAL_SECTIONS, fmtMoney } from "@/lib/stages";
 import PrintButton from "@/components/PrintButton";
 
@@ -18,17 +18,18 @@ export default async function ExportPage({
   const { id: idStr } = await params;
   const { letter } = await searchParams;
   const id = Number(idStr);
-  const d = db();
-  const opp = d.prepare(`SELECT * FROM opportunities WHERE id=?`).get(id) as
-    | { id: number; name: string; funder_name: string; amount: number; deadline: string }
-    | undefined;
+  const opp = await q.get<{ id: number; name: string; funder_name: string; amount: number; deadline: string }>(
+    `SELECT * FROM opportunities WHERE id=?`,
+    [id]
+  );
   if (!opp) notFound();
-  const profile = d.prepare(`SELECT * FROM org_profile WHERE id=1`).get() as {
+  const profile = (await q.get<{
     name: string; legal_status: string; mission: string; service_area: string; leadership: string;
-  };
-  const sections = d
-    .prepare(`SELECT section_key, content FROM proposal_sections WHERE opportunity_id=? AND content != ''`)
-    .all(id) as { section_key: string; content: string }[];
+  }>(`SELECT * FROM org_profile WHERE id=1`))!;
+  const sections = await q.all<{ section_key: string; content: string }>(
+    `SELECT section_key, content FROM proposal_sections WHERE opportunity_id=? AND content != ''`,
+    [id]
+  );
   const byKey = Object.fromEntries(sections.map((s) => [s.section_key, s.content]));
   const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 

@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { updateDocument, saveNarrative } from "@/lib/actions";
 import DocUpload from "@/components/DocUpload";
 
@@ -10,10 +10,9 @@ type Doc = {
 };
 type Narr = { id: number; category: string; title: string; content: string; updated_at: string };
 
-export default function Library() {
-  const d = db();
-  const docs = d.prepare(`SELECT * FROM documents ORDER BY category, name`).all() as Doc[];
-  const narrs = d.prepare(`SELECT * FROM narratives ORDER BY category, title`).all() as Narr[];
+export default async function Library() {
+  const docs = await q.all<Doc>(`SELECT * FROM documents ORDER BY category, name`);
+  const narrs = await q.all<Narr>(`SELECT * FROM narratives ORDER BY category, title`);
   const expiringSoon = docs.filter((doc) => {
     if (!doc.expires) return false;
     const days = (new Date(doc.expires).getTime() - Date.now()) / 86400000;

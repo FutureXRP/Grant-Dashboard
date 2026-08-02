@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { db } from "./db";
+import { q } from "./db";
 import { aiConfigured } from "./ai";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
@@ -95,16 +95,15 @@ export type ScoutProgress = {
   startedAt: string;
 };
 
-function writeProgress(p: ScoutProgress) {
-  db()
-    .prepare(`INSERT INTO settings (key, value) VALUES ('scout_progress', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
-    .run(JSON.stringify(p));
+async function writeProgress(p: ScoutProgress) {
+  await q.run(
+    `INSERT INTO settings (key, value) VALUES ('scout_progress', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    [JSON.stringify(p)]
+  );
 }
 
-export function getProgress(): ScoutProgress | null {
-  const row = db().prepare(`SELECT value FROM settings WHERE key='scout_progress'`).get() as
-    | { value: string }
-    | undefined;
+export async function getProgress(): Promise<ScoutProgress | null> {
+  const row = await q.get<{ value: string }>(`SELECT value FROM settings WHERE key='scout_progress'`);
   if (!row?.value) return null;
   try {
     const p = JSON.parse(row.value) as ScoutProgress;
@@ -210,30 +209,25 @@ export function deadlinePassed(deadline: string, now: number = Date.now()): bool
 
 export type DismissedItem = { key: string; title: string; dismissed_at: string };
 
-export function listDismissed(): DismissedItem[] {
-  return db()
-    .prepare(`SELECT key, title, dismissed_at FROM scout_dismissed ORDER BY dismissed_at DESC`)
-    .all() as DismissedItem[];
+export async function listDismissed(): Promise<DismissedItem[]> {
+  return q.all<DismissedItem>(`SELECT key, title, dismissed_at FROM scout_dismissed ORDER BY dismissed_at DESC`);
 }
 
-export function dismissKeyed(key: string, title: string) {
-  db()
-    .prepare(`INSERT OR IGNORE INTO scout_dismissed (key, title) VALUES (?, ?)`)
-    .run(key, title);
-  scrubLatestReport(key);
+export async function dismissKeyed(key: string, title: string) {
+  await q.run(`INSERT OR IGNORE INTO scout_dismissed (key, title) VALUES (?, ?)`, [key, title]);
+  await scrubLatestReport(key);
 }
 
-export function restoreKeyed(key: string) {
-  db().prepare(`DELETE FROM scout_dismissed WHERE key=?`).run(key);
+export async function restoreKeyed(key: string) {
+  await q.run(`DELETE FROM scout_dismissed WHERE key=?`, [key]);
 }
 
 // Remove a dismissed item from the most recent saved report so it disappears
 // immediately (not just on the next run).
-function scrubLatestReport(key: string) {
-  const d = db();
-  const row = d.prepare(`SELECT id, report FROM scout_reports ORDER BY id DESC LIMIT 1`).get() as
-    | { id: number; report: string }
-    | undefined;
+async function scrubLatestReport(key: string) {
+  const row = await q.get<{ id: number; report: string }>(
+    `SELECT id, report FROM scout_reports ORDER BY id DESC LIMIT 1`
+  );
   if (!row) return;
   try {
     const report = JSON.parse(row.report) as ScoutReport;
@@ -245,42 +239,41 @@ function scrubLatestReport(key: string) {
     }
     report.totalFound = report.hits.length;
     report.newCount = report.hits.filter((h) => h.isNew).length;
-    d.prepare(`UPDATE scout_reports SET report=? WHERE id=?`).run(JSON.stringify(report), row.id);
+    await q.run(`UPDATE scout_reports SET report=? WHERE id=?`, [JSON.stringify(report), row.id]);
   } catch {
     /* malformed stored report — leave it */
   }
 }
 
-export function listSources(): WatchSource[] {
-  return db().prepare(`SELECT id, name, url, kind, enabled FROM scout_sources ORDER BY kind, name`).all() as WatchSource[];
+export async function listSources(): Promise<WatchSource[]> {
+  return q.all<WatchSource>(`SELECT id, name, url, kind, enabled FROM scout_sources ORDER BY kind, name`);
 }
 
-export function addSource(name: string, url: string, kind: string) {
-  db().prepare(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`).run(name, url, kind);
+export async function addSource(name: string, url: string, kind: string) {
+  await q.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, [name, url, kind]);
 }
 
-export function updateSource(id: number, name: string, url: string) {
-  db().prepare(`UPDATE scout_sources SET name=?, url=?, last_hash='' WHERE id=?`).run(name, url, id);
+export async function updateSource(id: number, name: string, url: string) {
+  await q.run(`UPDATE scout_sources SET name=?, url=?, last_hash='' WHERE id=?`, [name, url, id]);
 }
 
-export function deleteSource(id: number) {
-  db().prepare(`DELETE FROM scout_sources WHERE id=?`).run(id);
+export async function deleteSource(id: number) {
+  await q.run(`DELETE FROM scout_sources WHERE id=?`, [id]);
 }
 
-export function toggleSource(id: number) {
-  db().prepare(`UPDATE scout_sources SET enabled = 1 - enabled WHERE id=?`).run(id);
+export async function toggleSource(id: number) {
+  await q.run(`UPDATE scout_sources SET enabled = 1 - enabled WHERE id=?`, [id]);
 }
 
-async function runWatch(errors: string[], tick: (label: string) => void): Promise<WatchResult> {
-  const d = db();
-  const sources = d
-    .prepare(`SELECT * FROM scout_sources WHERE enabled=1 ORDER BY kind, name`)
-    .all() as (WatchSource & { last_hash: string })[];
+async function runWatch(errors: string[], tick: (label: string) => Promise<void>): Promise<WatchResult> {
+  const sources = await q.all<WatchSource & { last_hash: string }>(
+    `SELECT * FROM scout_sources WHERE enabled=1 ORDER BY kind, name`
+  );
   const statuses: WatchResult["sources"] = [];
   const pages: { source: WatchSource & { last_hash: string }; text: string; changed: boolean }[] = [];
 
   for (const src of sources) {
-    tick(`Reading ${src.name}…`);
+    await tick(`Reading ${src.name}…`);
     try {
       const res = await fetch(src.url, {
         headers: { "User-Agent": "Mozilla/5.0 (GrantCopilot nonprofit grant scout)" },
@@ -291,7 +284,7 @@ async function runWatch(errors: string[], tick: (label: string) => void): Promis
       const text = stripHtml(await res.text()).slice(0, 12000);
       const hash = hashText(text);
       const changed = Boolean(src.last_hash) && src.last_hash !== hash;
-      d.prepare(`UPDATE scout_sources SET last_hash=?, last_checked=datetime('now') WHERE id=?`).run(hash, src.id);
+      await q.run(`UPDATE scout_sources SET last_hash=?, last_checked=datetime('now') WHERE id=?`, [hash, src.id]);
       pages.push({ source: src, text, changed });
       statuses.push({ name: src.name, url: src.url, kind: src.kind, status: "ok", changed });
     } catch (e) {
@@ -307,11 +300,11 @@ async function runWatch(errors: string[], tick: (label: string) => void): Promis
   } else if (!aiConfigured()) {
     summary = "Pages fetched, but ANTHROPIC_API_KEY is not set — no extraction/grading.";
   } else {
-    tick("AI is reading the watched pages for opportunities…");
+    await tick("AI is reading the watched pages for opportunities…");
     try {
-      const profile = d.prepare(`SELECT * FROM org_profile WHERE id=1`).get() as {
+      const profile = (await q.get<{
         name: string; legal_status: string; service_area: string; programs: string; populations: string;
-      };
+      }>(`SELECT * FROM org_profile WHERE id=1`))!;
       const body = pages
         .map(
           (p) =>
@@ -336,19 +329,19 @@ async function runWatch(errors: string[], tick: (label: string) => void): Promis
         const parsed = JSON.parse(text) as { summary: string; items: Omit<WatchFinding, "isNew" | "source_url">[] };
         summary = parsed.summary;
         const urlByName = new Map(sources.map((s) => [s.name, s.url]));
-        const dismissedKeys = new Set(listDismissed().map((r) => r.key));
+        const dismissedKeys = new Set((await listDismissed()).map((r) => r.key));
         const seen = new Set(
-          (d.prepare(`SELECT number FROM scout_seen`).all() as { number: string }[]).map((r) => r.number)
+          (await q.all<{ number: string }>(`SELECT number FROM scout_seen`)).map((r) => r.number)
         );
-        const insSeen = d.prepare(`INSERT OR IGNORE INTO scout_seen (number) VALUES (?)`);
-        findings = parsed.items
-          .map((item) => {
-            const key = watchKey(item.source, item.title);
-            const isNew = !seen.has(key);
-            insSeen.run(key);
-            return { ...item, key, source_url: urlByName.get(item.source) ?? "", isNew };
-          })
-          .filter((f) => !dismissedKeys.has(f.key) && !deadlinePassed(f.deadline));
+        findings = [];
+        for (const item of parsed.items) {
+          const key = watchKey(item.source, item.title);
+          const isNew = !seen.has(key);
+          await q.run(`INSERT OR IGNORE INTO scout_seen (number) VALUES (?)`, [key]);
+          if (!dismissedKeys.has(key) && !deadlinePassed(item.deadline)) {
+            findings.push({ ...item, key, source_url: urlByName.get(item.source) ?? "", isNew });
+          }
+        }
       }
     } catch (e) {
       errors.push(`Watch extraction failed: ${e instanceof Error ? e.message : "unknown error"}`);
@@ -363,17 +356,16 @@ async function runWatch(errors: string[], tick: (label: string) => void): Promis
   return { summary, findings, sources: statuses };
 }
 
-export function getKeywords(): string[] {
-  const row = db().prepare(`SELECT value FROM settings WHERE key='scout_keywords'`).get() as
-    | { value: string }
-    | undefined;
+export async function getKeywords(): Promise<string[]> {
+  const row = await q.get<{ value: string }>(`SELECT value FROM settings WHERE key='scout_keywords'`);
   return (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
-export function setKeywords(keywords: string) {
-  db()
-    .prepare(`INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`)
-    .run(keywords);
+export async function setKeywords(keywords: string) {
+  await q.run(
+    `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    [keywords]
+  );
 }
 
 async function searchGrantsGov(keyword: string): Promise<Omit<ScoutHit, "keyword" | "isNew">[]> {
@@ -404,28 +396,25 @@ async function searchGrantsGov(keyword: string): Promise<Omit<ScoutHit, "keyword
 }
 
 export async function runScout(): Promise<ScoutReport> {
-  const d = db();
-  const keywords = getKeywords();
+  const keywords = await getKeywords();
   const errors: string[] = [];
   const byNumber = new Map<string, ScoutHit>();
 
   // Progress tracking: one step per keyword search, one per watched page,
   // plus one for each of the two AI grading passes.
-  const sourceCount = (
-    d.prepare(`SELECT COUNT(*) n FROM scout_sources WHERE enabled=1`).get() as { n: number }
-  ).n;
+  const sourceCount = (await q.get<{ n: number }>(`SELECT COUNT(*) n FROM scout_sources WHERE enabled=1`))!.n;
   const total = keywords.length + 1 + sourceCount + 1;
   const startedAt = new Date().toISOString();
   let step = 0;
-  const tick = (label: string) => {
+  const tick = async (label: string) => {
     step = Math.min(step + 1, total);
-    writeProgress({ active: true, step, total, label, startedAt });
+    await writeProgress({ active: true, step, total, label, startedAt });
   };
 
   try {
 
   for (const kw of keywords) {
-    tick(`Searching Grants.gov: “${kw}”…`);
+    await tick(`Searching Grants.gov: “${kw}”…`);
     try {
       const results = await searchGrantsGov(kw);
       for (const r of results) {
@@ -439,27 +428,26 @@ export async function runScout(): Promise<ScoutReport> {
   }
 
   // Skip anything whose deadline already passed, and anything dismissed.
-  const dismissed = new Set(listDismissed().map((r) => r.key));
+  const dismissed = new Set((await listDismissed()).map((r) => r.key));
   const hits = Array.from(byNumber.values()).filter(
     (h) => !dismissed.has(h.number) && !deadlinePassed(h.closeDate)
   );
 
   // Mark new vs. previously seen, then record all as seen.
   const seen = new Set(
-    (d.prepare(`SELECT number FROM scout_seen`).all() as { number: string }[]).map((r) => r.number)
+    (await q.all<{ number: string }>(`SELECT number FROM scout_seen`)).map((r) => r.number)
   );
   for (const h of hits) h.isNew = !seen.has(h.number);
-  const insSeen = d.prepare(`INSERT OR IGNORE INTO scout_seen (number) VALUES (?)`);
-  for (const h of hits) insSeen.run(h.number);
+  for (const h of hits) await q.run(`INSERT OR IGNORE INTO scout_seen (number) VALUES (?)`, [h.number]);
 
   let summary = "";
   let graded = false;
-  tick("AI is grading federal results against your profile…");
+  await tick("AI is grading federal results against your profile…");
   if (aiConfigured() && hits.length > 0) {
     try {
-      const profile = d.prepare(`SELECT * FROM org_profile WHERE id=1`).get() as {
+      const profile = (await q.get<{
         name: string; legal_status: string; service_area: string; programs: string; populations: string;
-      };
+      }>(`SELECT * FROM org_profile WHERE id=1`))!;
       const list = hits
         .slice(0, 100)
         .map((h) => `${h.number} | ${h.agency} | ${h.title} | closes ${h.closeDate || "TBD"}${h.isNew ? " | NEW today" : ""}`)
@@ -522,28 +510,26 @@ export async function runScout(): Promise<ScoutReport> {
     errors,
     watch,
   };
-  d.prepare(`INSERT INTO scout_reports (report) VALUES (?)`).run(JSON.stringify(report));
+  await q.run(`INSERT INTO scout_reports (report) VALUES (?)`, [JSON.stringify(report)]);
   // Keep the last 30 reports.
-  d.prepare(
+  await q.run(
     `DELETE FROM scout_reports WHERE id NOT IN (SELECT id FROM scout_reports ORDER BY id DESC LIMIT 30)`
-  ).run();
+  );
   return report;
 
   } finally {
-    writeProgress({ active: false, step: total, total, label: "done", startedAt });
+    await writeProgress({ active: false, step: total, total, label: "done", startedAt });
   }
 }
 
-export function latestReport(): ScoutReport | null {
-  const row = db().prepare(`SELECT report FROM scout_reports ORDER BY id DESC LIMIT 1`).get() as
-    | { report: string }
-    | undefined;
+export async function latestReport(): Promise<ScoutReport | null> {
+  const row = await q.get<{ report: string }>(`SELECT report FROM scout_reports ORDER BY id DESC LIMIT 1`);
   if (!row) return null;
   const report = JSON.parse(row.report) as ScoutReport;
   // Filter at read time so dismissed grants and missed windows leave the page
   // immediately — even between runs, and even for reports saved before this
   // feature existed.
-  const dismissed = new Set(listDismissed().map((r) => r.key));
+  const dismissed = new Set((await listDismissed()).map((r) => r.key));
   report.hits = (report.hits ?? []).filter(
     (h) => !dismissed.has(h.number) && !deadlinePassed(h.closeDate)
   );

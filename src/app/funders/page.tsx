@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { updateFunderNotes } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ export default async function Funders({
   searchParams: Promise<{ open?: string }>;
 }) {
   const { open } = await searchParams;
-  const funders = db().prepare(`SELECT * FROM funders ORDER BY tier, name`).all() as Funder[];
+  const funders = await q.all<Funder>(`SELECT * FROM funders ORDER BY tier, name`);
 
   return (
     <div className="space-y-5">

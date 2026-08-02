@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { db } from "./db";
+import { q } from "./db";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 
@@ -76,16 +76,16 @@ type OppRow = {
   nofo_text: string; eligibility_notes: string; url: string;
 };
 
-function getOpp(id: number): OppRow {
-  const opp = db().prepare(`SELECT * FROM opportunities WHERE id=?`).get(id) as OppRow | undefined;
+async function getOpp(id: number): Promise<OppRow> {
+  const opp = await q.get<OppRow>(`SELECT * FROM opportunities WHERE id=?`, [id]);
   if (!opp) throw new Error("Opportunity not found");
   return opp;
 }
 
-function profileText(): string {
-  const p = db().prepare(`SELECT * FROM org_profile WHERE id=1`).get() as {
+async function profileText(): Promise<string> {
+  const p = (await q.get<{
     name: string; legal_status: string; service_area: string; programs: string; stats: string;
-  };
+  }>(`SELECT * FROM org_profile WHERE id=1`))!;
   return `Organization: ${p.name} (${p.legal_status}). Service area: ${p.service_area}. Programs: ${p.programs}. Known stats: ${p.stats}`;
 }
 
@@ -124,8 +124,8 @@ async function structured<T>(system: string, user: string, schema: Record<string
 }
 
 export async function generateEligibilityQuestions(opportunityId: number): Promise<EligQuestion[]> {
-  const opp = getOpp(opportunityId);
-  const user = `${profileText()}
+  const opp = await getOpp(opportunityId);
+  const user = `${await profileText()}
 
 # Opportunity
 Grant: ${opp.name}
@@ -138,12 +138,12 @@ ${opp.nofo_text ? opp.nofo_text.slice(0, 150000) : "(No NOFO text pasted. Genera
 Generate the eligibility screening questions.`;
 
   const result = await structured<{ questions: EligQuestion[] }>(SCREENER_SYSTEM, user, QUESTIONS_SCHEMA);
-  const d = db();
-  d.prepare(
+  await q.run(
     `INSERT INTO eligibility_screens (opportunity_id, questions, answers, verdict, updated_at)
      VALUES (?, ?, '{}', '', datetime('now'))
-     ON CONFLICT(opportunity_id) DO UPDATE SET questions=excluded.questions, answers='{}', verdict='', updated_at=datetime('now')`
-  ).run(opportunityId, JSON.stringify(result.questions));
+     ON CONFLICT(opportunity_id) DO UPDATE SET questions=excluded.questions, answers='{}', verdict='', updated_at=datetime('now')`,
+    [opportunityId, JSON.stringify(result.questions)]
+  );
   return result.questions;
 }
 
@@ -151,22 +151,22 @@ export async function evaluateEligibility(
   opportunityId: number,
   answers: Record<string, string>
 ): Promise<EligVerdict> {
-  const opp = getOpp(opportunityId);
-  const d = db();
-  const screen = d
-    .prepare(`SELECT questions FROM eligibility_screens WHERE opportunity_id=?`)
-    .get(opportunityId) as { questions: string } | undefined;
+  const opp = await getOpp(opportunityId);
+  const screen = await q.get<{ questions: string }>(
+    `SELECT questions FROM eligibility_screens WHERE opportunity_id=?`,
+    [opportunityId]
+  );
   if (!screen) throw new Error("Generate the questions first");
   const questions: EligQuestion[] = JSON.parse(screen.questions);
 
   const qa = questions
     .map(
-      (q) =>
-        `- [${q.knockout ? "KNOCKOUT" : "competitiveness"}] ${q.question}\n  Answer: ${answers[q.id]?.trim() || "(unanswered)"}`
+      (question) =>
+        `- [${question.knockout ? "KNOCKOUT" : "competitiveness"}] ${question.question}\n  Answer: ${answers[question.id]?.trim() || "(unanswered)"}`
     )
     .join("\n");
 
-  const user = `${profileText()}
+  const user = `${await profileText()}
 
 # Opportunity
 Grant: ${opp.name}
@@ -181,29 +181,31 @@ ${qa}
 Deliver the eligibility verdict.`;
 
   const verdict = await structured<EligVerdict>(VERDICT_SYSTEM, user, VERDICT_SCHEMA);
-  d.prepare(
-    `UPDATE eligibility_screens SET answers=?, verdict=?, updated_at=datetime('now') WHERE opportunity_id=?`
-  ).run(JSON.stringify(answers), JSON.stringify(verdict), opportunityId);
+  await q.run(
+    `UPDATE eligibility_screens SET answers=?, verdict=?, updated_at=datetime('now') WHERE opportunity_id=?`,
+    [JSON.stringify(answers), JSON.stringify(verdict), opportunityId]
+  );
 
   // Surface the verdict on the opportunity record so it shows across the app.
   const label =
     verdict.verdict === "eligible" ? "ELIGIBLE (screened)" :
     verdict.verdict === "not_eligible" ? "NOT ELIGIBLE (screened)" : "CONDITIONAL (screened)";
-  d.prepare(`UPDATE opportunities SET eligibility_notes=?, updated_at=datetime('now') WHERE id=?`).run(
+  await q.run(`UPDATE opportunities SET eligibility_notes=?, updated_at=datetime('now') WHERE id=?`, [
     `${label}: ${verdict.summary}`,
-    opportunityId
-  );
+    opportunityId,
+  ]);
   return verdict;
 }
 
-export function getScreen(opportunityId: number): {
+export async function getScreen(opportunityId: number): Promise<{
   questions: EligQuestion[];
   answers: Record<string, string>;
   verdict: EligVerdict | null;
-} {
-  const row = db()
-    .prepare(`SELECT questions, answers, verdict FROM eligibility_screens WHERE opportunity_id=?`)
-    .get(opportunityId) as { questions: string; answers: string; verdict: string } | undefined;
+}> {
+  const row = await q.get<{ questions: string; answers: string; verdict: string }>(
+    `SELECT questions, answers, verdict FROM eligibility_screens WHERE opportunity_id=?`,
+    [opportunityId]
+  );
   if (!row) return { questions: [], answers: {}, verdict: null };
   return {
     questions: JSON.parse(row.questions || "[]"),

@@ -4,5 +4,5 @@ import { getProgress } from "@/lib/scout";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ progress: getProgress() });
+  return NextResponse.json({ progress: await getProgress() });
 }

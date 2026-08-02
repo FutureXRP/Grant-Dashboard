@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { STAGES, fmtMoney, daysUntil, deadlineColor } from "@/lib/stages";
 import { setStage } from "@/lib/actions";
 
@@ -10,8 +10,8 @@ type Opp = {
   amount: number; deadline: string;
 };
 
-export default function Pipeline() {
-  const opps = db().prepare(`SELECT * FROM opportunities ORDER BY deadline = '', deadline`).all() as Opp[];
+export default async function Pipeline() {
+  const opps = await q.all<Opp>(`SELECT * FROM opportunities ORDER BY deadline = '', deadline`);
 
   return (
     <div className="space-y-4">

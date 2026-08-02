@@ -1,12 +1,12 @@
-import { db } from "@/lib/db";
+import { q } from "@/lib/db";
 import { setReadiness } from "@/lib/actions";
 
 export const dynamic = "force-dynamic";
 
 type Item = { id: number; item: string; category: string; detail: string; status: string };
 
-export default function Readiness() {
-  const items = db().prepare(`SELECT * FROM readiness ORDER BY id`).all() as Item[];
+export default async function Readiness() {
+  const items = await q.all<Item>(`SELECT * FROM readiness ORDER BY id`);
   const ready = items.filter((i) => i.status === "ready").length;
   const categories = Array.from(new Set(items.map((i) => i.category)));
 
