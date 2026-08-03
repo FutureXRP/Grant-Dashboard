@@ -73,8 +73,12 @@ function remoteBackend(): Backend {
   /* eslint-disable @typescript-eslint/no-require-imports */
   const { createClient } = require("@libsql/client/web") as typeof import("@libsql/client/web");
   /* eslint-enable @typescript-eslint/no-require-imports */
+  // Turso hands out libsql:// URLs, which the web client opens over a
+  // WebSocket — unavailable in some serverless runtimes. Rewriting to
+  // https:// makes it use plain HTTP fetch, which works everywhere.
+  const url = process.env.TURSO_DATABASE_URL!.replace(/^libsql:\/\//, "https://");
   const client = createClient({
-    url: process.env.TURSO_DATABASE_URL!,
+    url,
     authToken: process.env.TURSO_AUTH_TOKEN,
   });
   const toArgs = (params: Params) =>
