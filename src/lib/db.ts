@@ -244,6 +244,11 @@ async function migrate(b: Backend) {
     packet TEXT DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS opportunity_budgets (
+    opportunity_id INTEGER PRIMARY KEY,
+    budget TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS scout_dismissed (
     key TEXT PRIMARY KEY,
     title TEXT DEFAULT '',

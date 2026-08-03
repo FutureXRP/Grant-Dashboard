@@ -59,6 +59,7 @@ export default async function OpportunityDetail({ params }: { params: Promise<{ 
         <div className="flex gap-2 shrink-0">
           <Link href={`/opportunities/${id}/eligibility`} className="btn-secondary">Eligibility screen</Link>
           <Link href={`/opportunities/${id}/proposal`} className="btn">Proposal workspace →</Link>
+          <Link href={`/opportunities/${id}/budget`} className="btn-secondary">Budget</Link>
           <Link href={`/opportunities/${id}/export`} className="btn-secondary">Export / PDF</Link>
           <Link href={`/opportunities/${id}/sf424`} className="btn-secondary">SF-424</Link>
         </div>
