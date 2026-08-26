@@ -99,10 +99,15 @@ One-time setup (~20 minutes):
    `ANTHROPIC_API_KEY`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `SUPABASE_URL`,
    `SUPABASE_SERVICE_ROLE_KEY`, and `CRON_SECRET` (any long random string — it locks the cron
    endpoint so strangers can't trigger runs that spend AI credits).
-5. **Deploy.** The schema creates and seeds itself on the first page load. The included
-   `vercel.json` schedules the Grant Scout automatically every morning (12:00 UTC = 6–7 AM
-   Oklahoma time) via `/api/scout/cron` — no crontab needed. Every future `git push` to main
-   redeploys automatically.
+5. **Deploy.** The schema creates and seeds itself on the first page load. Every future
+   `git push` to main redeploys automatically.
+6. **Daily scout (currently OFF to save API spend).** The morning sweep costs an AI-grading
+   call every day whether or not anyone reads it, so it stays disabled until the team is
+   actively using the dashboard. To turn it on, put this in `vercel.json` and push:
+   `{ "crons": [{ "path": "/api/scout/cron", "schedule": "0 12 * * *" }] }`
+   (12:00 UTC = 6–7 AM Oklahoma time). To turn it off again, set `"crons": []` and push.
+   The **Run scout now** button on the Scout page always works either way — one run,
+   one charge, only when you ask for it.
 
 Notes for Vercel:
 - A long scout run is capped at 300 seconds there. With the default keyword/source list a run
