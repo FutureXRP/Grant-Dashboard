@@ -1,6 +1,9 @@
 import { revalidatePath } from "next/cache";
 import { latestReport, getKeywords, setKeywords, listSources, addSource, updateSource, deleteSource, toggleSource, listDismissed } from "@/lib/scout";
+import { latestDiscovery } from "@/lib/discover";
+import { aiConfigured } from "@/lib/ai";
 import ScoutPanel from "@/components/ScoutPanel";
+import DiscoverPanel from "@/components/DiscoverPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +47,7 @@ export default async function ScoutPage() {
   const keywords = (await getKeywords()).join("\n");
   const sources = await listSources();
   const dismissed = await listDismissed();
+  const discovery = await latestDiscovery();
 
   return (
     <div className="space-y-4">
@@ -51,9 +55,10 @@ export default async function ScoutPage() {
       <p className="text-sm text-gray-600 max-w-3xl">
         Every run: (1) sweeps Grants.gov across your keywords for federal opportunities — including Native-focused
         programs like ANA that accept Native nonprofit organizations; (2) fetches every watched Oklahoma-agency,
-        foundation, and Native-funder page, detects changes, and extracts + grades any opportunity announced there.
-        Everything is graded against your organization profile with a one-line reason.
+        foundation, corporate-giving, and Native-funder page, detects changes, and extracts + grades any opportunity
+        announced there. Everything is graded against your organization profile with a one-line reason.
       </p>
+      <DiscoverPanel initialReport={discovery} aiReady={aiConfigured()} />
       <ScoutPanel
         initialReport={report}
         initialKeywords={keywords}

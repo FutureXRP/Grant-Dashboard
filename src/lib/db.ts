@@ -384,6 +384,48 @@ async function migrate(b: Backend) {
     }
     await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v4_food_rec', 'done')`);
   }
+
+  // One-time upgrade v5 (dashboard audit): corporate giving programs, TSET, and
+  // the big Tulsa family foundations — funder types the team was finding by
+  // hand that the scout had no source for.
+  const flag5 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v5_corporate_tset'`);
+  if (!flag5) {
+    const v5Sources: [string, string, string][] = [
+      ["TSET — Oklahoma Tobacco Settlement Endowment Trust (funding)", "https://tset.ok.gov/funding-opportunities/", "state"],
+      ["Walmart & Sam's Club — Local Community Grants (Spark Good)", "https://walmart.org/how-we-give/local-community-grants", "corporate"],
+      ["Lowe's Hometowns — community impact", "https://corporate.lowes.com/our-responsibilities/lowes-hometowns", "corporate"],
+      ["Home Depot Foundation", "https://corporate.homedepot.com/foundation", "corporate"],
+      ["Cox Charities", "https://www.coxcharities.org/", "corporate"],
+      ["Dollar General Literacy Foundation — grants", "https://www.dgliteracy.org/grant-programs/", "foundation"],
+      ["George Kaiser Family Foundation", "https://www.gkff.org/", "foundation"],
+      ["Zarrow Family Foundations", "https://zarrow.com/", "foundation"],
+      ["Hardesty Family Foundation", "https://www.hardestyfamilyfoundation.org/", "foundation"],
+    ];
+    for (const s of v5Sources) {
+      await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, s);
+    }
+    const v5Funders = [
+      { name: "TSET (Oklahoma Tobacco Settlement Endowment Trust)", type: "state", tier: 1, focus: "Health-focused Oklahoma funder: physical activity, nutrition, healthy built environment (parks, walking trails), tobacco-free community wellness", award_range: "$10K – $1M+ (program-dependent)", projects: "Walking track restoration, splashpad, fitness programming, nutrition education — TSET Healthy Living / built-environment funding is squarely on-mission", website: "https://tset.ok.gov" },
+      { name: "Walmart & Sam's Club Local Community Grants (Spark Good)", type: "corporate", tier: 2, focus: "Quick-turn $250–$5,000 grants from each local Walmart and Sam's Club facility; quarterly open application cycles via Walmart.org Spark Good", award_range: "$250 – $5K per facility", projects: "Food distribution supplies, youth programming, community events — small fast wins; apply to every nearby store separately", website: "https://walmart.org/how-we-give/local-community-grants" },
+      { name: "Lowe's Hometowns", type: "corporate", tier: 2, focus: "Community space renovation and improvement projects (annual cycle + store-level support)", award_range: "Up to $100K (flagship projects)", projects: "Community center improvements, outdoor recreation buildout on the campus", website: "https://corporate.lowes.com/our-responsibilities/lowes-hometowns" },
+      { name: "Home Depot Foundation", type: "corporate", tier: 3, focus: "Community improvement, veteran housing, disaster relief; Team Depot volunteer builds", award_range: "Product + volunteer builds; grants vary", projects: "Playground/track build support with volunteer labor", website: "https://corporate.homedepot.com/foundation" },
+      { name: "Cox Charities (Oklahoma)", type: "corporate", tier: 2, focus: "Youth, education, and community nonprofit grants in Cox service areas", award_range: "$2.5K – $10K", projects: "Early learning programming, youth development", website: "https://www.coxcharities.org" },
+      { name: "Dollar General Literacy Foundation", type: "foundation", tier: 2, focus: "Early childhood literacy, family literacy, adult education", award_range: "$3K – $10K", projects: "Early Learning Center literacy programming and family literacy nights", website: "https://www.dgliteracy.org" },
+      { name: "George Kaiser Family Foundation", type: "foundation", tier: 1, focus: "One of Tulsa's largest funders: early childhood education, health, community wellbeing, two-generation family support", award_range: "Varies (relationship-driven)", projects: "Early Learning Center expansion, whole-family model — build the relationship; often invitation-based", website: "https://www.gkff.org" },
+      { name: "Anne & Henry Zarrow Foundation", type: "foundation", tier: 1, focus: "Tulsa-area health, human services, social justice, basic needs", award_range: "$10K – $250K", projects: "Medical center operations, food security, family services", website: "https://zarrow.com" },
+      { name: "Hardesty Family Foundation", type: "foundation", tier: 2, focus: "Tulsa-area youth, education, parks and recreation, community facilities", award_range: "$10K – $100K", projects: "Playground, splashpad, and walking track on the 10 acres", website: "https://www.hardestyfamilyfoundation.org" },
+    ];
+    for (const f of v5Funders) {
+      const exists = await b.get<{ id: number }>(`SELECT id FROM funders WHERE name=?`, [f.name]);
+      if (!exists) {
+        await b.run(
+          `INSERT INTO funders (name, type, tier, focus, award_range, projects, website) VALUES (@name, @type, @tier, @focus, @award_range, @projects, @website)`,
+          f
+        );
+      }
+    }
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v5_corporate_tset', 'done')`);
+  }
 }
 
 async function addKeywords(b: Backend, keywords: string[]) {

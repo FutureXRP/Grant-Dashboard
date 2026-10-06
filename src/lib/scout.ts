@@ -285,6 +285,18 @@ async function runWatch(errors: string[], tick: (label: string) => Promise<void>
       const hash = hashText(text);
       const changed = Boolean(src.last_hash) && src.last_hash !== hash;
       await q.run(`UPDATE scout_sources SET last_hash=?, last_checked=datetime('now') WHERE id=?`, [hash, src.id]);
+      // A page that returns almost no readable text is usually rendered by
+      // JavaScript (common on corporate giving sites) — the AI would silently
+      // find nothing there. Flag it so the team opens it by hand or re-points
+      // the URL, instead of trusting a false "ok".
+      if (text.length < 400) {
+        statuses.push({
+          name: src.name, url: src.url, kind: src.kind,
+          status: "thin content — page is likely JavaScript-rendered; check it manually or re-point the URL",
+          changed,
+        });
+        continue;
+      }
       pages.push({ source: src, text, changed });
       statuses.push({ name: src.name, url: src.url, kind: src.kind, status: "ok", changed });
     } catch (e) {
