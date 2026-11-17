@@ -426,6 +426,27 @@ async function migrate(b: Backend) {
     }
     await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v5_corporate_tset', 'done')`);
   }
+
+  // One-time upgrade v6: Instrumentl's free Oklahoma grant-listing pages
+  // (user-requested). These are server-rendered aggregator pages listing real
+  // grants with funder, amount, and due date — one page per program lane.
+  const flag6 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v6_instrumentl'`);
+  if (!flag6) {
+    const v6Sources: [string, string, string][] = [
+      ["Instrumentl — OK community health grants", "https://www.instrumentl.com/browse-grants/oklahoma/community-health-grants", "aggregator"],
+      ["Instrumentl — OK mental health grants", "https://www.instrumentl.com/browse-grants/oklahoma/mental-health-grants", "aggregator"],
+      ["Instrumentl — OK early childhood grants", "https://www.instrumentl.com/browse-grants/oklahoma/early-childhood-development-grants", "aggregator"],
+      ["Instrumentl — OK child care center grants", "https://www.instrumentl.com/browse-grants/oklahoma/grants-for-nonprofit-child-care-centers", "aggregator"],
+      ["Instrumentl — OK food grants", "https://www.instrumentl.com/browse-grants/oklahoma/food-grants-for-nonprofits", "aggregator"],
+      ["Instrumentl — OK playground grants", "https://www.instrumentl.com/browse-grants/oklahoma/playground-grants-for-nonprofits", "aggregator"],
+      ["Instrumentl — OK recreation grants", "https://www.instrumentl.com/browse-grants/oklahoma/recreation-grants-for-nonprofits", "aggregator"],
+      ["Instrumentl — OK Native American grants", "https://www.instrumentl.com/browse-grants/oklahoma/grants-for-native-americans", "native"],
+    ];
+    for (const s of v6Sources) {
+      await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, s);
+    }
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v6_instrumentl', 'done')`);
+  }
 }
 
 async function addKeywords(b: Backend, keywords: string[]) {

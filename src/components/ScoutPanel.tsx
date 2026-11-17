@@ -21,6 +21,8 @@ const KIND_LABEL: Record<string, string> = {
   state: "Oklahoma state",
   foundation: "Foundation",
   native: "Native funders",
+  corporate: "Corporate giving",
+  aggregator: "Grant directory",
 };
 
 const FIT_RANK: Record<string, number> = {
@@ -537,6 +539,8 @@ export default function ScoutPanel({
                 <option value="state">state</option>
                 <option value="foundation">foundation</option>
                 <option value="native">native</option>
+                <option value="corporate">corporate</option>
+                <option value="aggregator">aggregator</option>
               </select>
             </div>
             <button className="btn">Add</button>
