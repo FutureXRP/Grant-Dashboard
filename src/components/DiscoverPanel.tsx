@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import type { DiscoveryReport, DiscoveryItem } from "@/lib/discover";
+import { useState, useRef, useEffect } from "react";
+import type { DiscoveryReport, DiscoveryItem, DiscoveryProgress } from "@/lib/discover";
 
 const GRADE_STYLE: Record<string, string> = {
   strong_fit: "bg-green-100 text-green-800",
@@ -17,25 +17,92 @@ export default function DiscoverPanel({
 }) {
   const [report, setReport] = useState<DiscoveryReport | null>(initialReport);
   const [running, setRunning] = useState(false);
+  const [progressLabel, setProgressLabel] = useState("");
   const [error, setError] = useState("");
   const [watched, setWatched] = useState<Set<string>>(new Set());
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  // The poll loop is the source of truth for completion — hosted gateways
+  // (Vercel, proxies) can cut the long-running POST even while the run
+  // continues server-side, which used to leave this spinner stuck forever.
   async function run() {
     setRunning(true);
     setError("");
+    setProgressLabel("");
+    const startedAt = Date.now();
+    const prevRanAt = report?.ranAt ?? null;
+    let sawActive = false;
+    let lastActiveAt = Date.now();
+    let finished = false;
+
+    const finish = (r: DiscoveryReport | null, errMsg?: string) => {
+      if (finished) return;
+      finished = true;
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      if (r) setReport(r);
+      if (errMsg) setError(errMsg);
+      setProgressLabel("");
+      setRunning(false);
+    };
+
+    pollRef.current = setInterval(async () => {
+      if (finished) return;
+      try {
+        const res = await fetch("/api/scout/discover");
+        const data = (await res.json()) as { report?: DiscoveryReport | null; progress?: DiscoveryProgress | null };
+        const p = data.progress ?? null;
+        if (p?.active) {
+          sawActive = true;
+          lastActiveAt = Date.now();
+          setProgressLabel(p.label);
+          return;
+        }
+        // Not active: if a fresh report exists, the run finished.
+        if (data.report && data.report.ranAt !== prevRanAt) {
+          finish(data.report);
+          return;
+        }
+        // Progress went quiet with no new report — the host likely killed the
+        // run. Give it a grace period, then say so instead of spinning forever.
+        if (sawActive && Date.now() - lastActiveAt > 120000) {
+          finish(null, "The run was cut off before finishing (hosting time limit). Run it again — results land here when a run completes.");
+        }
+      } catch {
+        /* transient poll error — keep going */
+      }
+      if (!finished && Date.now() - startedAt > 7 * 60 * 1000) {
+        finish(null, "Timed out waiting for the sweep to finish. Run it again in a minute.");
+      }
+    }, 2500);
+
+    // Kick off the run; if the response survives the gateway, use it as a
+    // fast path. If not, the poll loop above finishes the job.
     try {
       const res = await fetch("/api/scout/discover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "run" }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Discovery failed");
-      setReport(data.report);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Discovery failed");
-    } finally {
-      setRunning(false);
+      const text = await res.text();
+      let data: { report?: DiscoveryReport; error?: string } = {};
+      try {
+        data = JSON.parse(text);
+      } catch {
+        /* gateway error page, not JSON — poll loop takes over */
+      }
+      if (res.ok && data.report) finish(data.report);
+      else if (!res.ok && data.error) finish(null, data.error);
+    } catch {
+      /* connection cut mid-run — poll loop takes over */
     }
   }
 
@@ -69,7 +136,10 @@ export default function DiscoverPanel({
           </p>
         </div>
         <button className="btn" onClick={run} disabled={running || !aiReady} title={aiReady ? "" : "Set ANTHROPIC_API_KEY to enable"}>
-          {running ? "Researching the web… (1–3 min)" : "🔎 Run discovery sweep"}
+          {running && (
+            <span className="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+          )}
+          {running ? progressLabel || "Starting the sweep…" : "🔎 Run discovery sweep"}
         </button>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}

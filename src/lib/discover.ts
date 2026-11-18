@@ -72,8 +72,38 @@ Method:
 - For each finding, note the single page on the funder's site that announces opportunities — that becomes a candidate for the org's automated watch list.
 - End with a short summary: the 2–3 best leads and why.`;
 
+export type DiscoveryProgress = {
+  active: boolean;
+  label: string;
+  startedAt: string;
+};
+
+async function writeDiscoveryProgress(p: DiscoveryProgress) {
+  await q.run(
+    `INSERT INTO settings (key, value) VALUES ('discovery_progress', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    [JSON.stringify(p)]
+  );
+}
+
+export async function getDiscoveryProgress(): Promise<DiscoveryProgress | null> {
+  const row = await q.get<{ value: string }>(`SELECT value FROM settings WHERE key='discovery_progress'`);
+  if (!row?.value) return null;
+  try {
+    const p = JSON.parse(row.value) as DiscoveryProgress;
+    // A run killed by the host never clears its progress — ignore stale state
+    // (Vercel caps the run at 5 minutes, so 6 is definitely dead).
+    if (p.active && Date.now() - new Date(p.startedAt).getTime() > 6 * 60 * 1000) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
 export async function runDiscovery(): Promise<DiscoveryReport> {
   if (!aiConfigured()) throw new Error("ANTHROPIC_API_KEY is not set.");
+  const startedAt = new Date().toISOString();
+  const tick = (label: string) => writeDiscoveryProgress({ active: true, label, startedAt });
+  try {
   const profile = (await q.get<{
     name: string; legal_status: string; mission: string; programs: string;
     service_area: string; populations: string;
@@ -103,7 +133,8 @@ Research grant opportunities this organization is likely missing. Today's date: 
   let messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: brief }];
   let searchesUsed = 0;
   let researchText = "";
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 3; i++) {
+    await tick(i === 0 ? "Searching the web for funders…" : `Continuing research (round ${i + 1})…`);
     const response = await client.beta.messages.create({
       model: MODEL,
       max_tokens: 16000,
@@ -123,6 +154,7 @@ Research grant opportunities this organization is likely missing. Today's date: 
 
   // Step 2 — parse the research into structured findings (no tools, so the
   // JSON-schema output constraint applies cleanly).
+  await tick("Organizing and grading the findings…");
   const parseResponse = await client.messages.create({
     model: MODEL,
     max_tokens: 8000,
@@ -149,6 +181,10 @@ Research grant opportunities this organization is likely missing. Today's date: 
     [JSON.stringify(report)]
   );
   return report;
+
+  } finally {
+    await writeDiscoveryProgress({ active: false, label: "done", startedAt });
+  }
 }
 
 // Latest stored report with dismissed items filtered out.

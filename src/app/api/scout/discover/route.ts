@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runDiscovery, latestDiscovery } from "@/lib/discover";
+import { runDiscovery, latestDiscovery, getDiscoveryProgress } from "@/lib/discover";
 import { addSource } from "@/lib/scout";
 import { aiConfigured } from "@/lib/ai";
 
@@ -7,7 +7,7 @@ export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return NextResponse.json({ report: await latestDiscovery() });
+  return NextResponse.json({ report: await latestDiscovery(), progress: await getDiscoveryProgress() });
 }
 
 export async function POST(req: NextRequest) {
