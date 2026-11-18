@@ -294,6 +294,10 @@ async function migrate(b: Backend) {
   ]);
 
   // Starter watch list for the state/foundation page watcher (Sections 5-6 funders).
+  // One-time: re-running it after a source's URL has been re-pointed (v8) would
+  // re-insert the OLD url as a duplicate row, since name is not unique but url is.
+  const flagBase = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_base_sources_once'`);
+  if (!flagBase) {
   const sources: [string, string, string][] = [
     ["Oklahoma State Dept. of Health — grants & procurement", "https://oklahoma.gov/health/about-us/procurement---grants-management.html", "state"],
     ["ODMHSAS — procurement & funding", "https://oklahoma.gov/odmhsas/about/procurement-and-contracts.html", "state"],
@@ -313,6 +317,8 @@ async function migrate(b: Backend) {
   ];
   for (const s of sources) {
     await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, s);
+  }
+  await b.run(`INSERT INTO settings (key, value) VALUES ('seed_base_sources_once', 'done')`);
   }
 
   // One-time keyword upgrade for existing databases: add Native-focused keywords.
@@ -494,6 +500,25 @@ async function migrate(b: Backend) {
   // as 404/thin (sites reorganized, or the original best-guess URL was wrong)
   // to researched current URLs, and watch OSDH's Rural Health Transformation
   // Program funding page (an official page; discovery's top lead).
+  // Clean up duplicate rows the old always-on base seed may have created for
+  // seed-managed source names (runs every init; idempotent; keeps the oldest
+  // row, which is the one v8's re-point updates). Scoped to seed names so
+  // user-added sources are never touched.
+  try {
+    await b.run(
+      `DELETE FROM scout_sources WHERE name IN (
+         'Sarkeys Foundation — grants', 'Tulsa Community Foundation — grants',
+         'Lowe''s Hometowns — community impact', 'Blue Cross Blue Shield of Oklahoma — community',
+         'ODMHSAS — procurement & funding', 'Oklahoma Dept. of Commerce — community funding',
+         'Oklahoma State Dept. of Health — grants & procurement',
+         'Oklahoma Tourism & Recreation — grants (LWCF)',
+         'Oklahoma Human Services — procurement & grants', 'Zarrow Family Foundations'
+       ) AND id NOT IN (SELECT MIN(id) FROM scout_sources GROUP BY name)`
+    );
+  } catch {
+    /* best-effort cleanup */
+  }
+
   const flag8 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v8_url_fixes'`);
   if (!flag8) {
     const repoints: [string, string][] = [
@@ -509,7 +534,15 @@ async function migrate(b: Backend) {
       ["Zarrow Family Foundations", "https://zarrow.org/"],
     ];
     for (const [name, url] of repoints) {
-      await b.run(`UPDATE scout_sources SET url=?, last_hash='' WHERE name=?`, [url, name]);
+      // scout_sources.url is UNIQUE — if the team already added or re-pointed
+      // a source to this URL, the UPDATE would throw and, uncaught, take the
+      // whole app down at startup (migrate runs before every page). Skip the
+      // conflicting row instead: the goal state already exists.
+      try {
+        await b.run(`UPDATE scout_sources SET url=?, last_hash='' WHERE name=?`, [url, name]);
+      } catch {
+        /* URL already on another row — keep theirs */
+      }
     }
     await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, [
       "OSDH — Rural Health Transformation Program funding",
