@@ -281,7 +281,7 @@ async function runWatch(errors: string[], tick: (label: string) => Promise<void>
         redirect: "follow",
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = stripHtml(await res.text()).slice(0, 16000);
+      const text = stripHtml(await res.text()).slice(0, 24000);
       const hash = hashText(text);
       const changed = Boolean(src.last_hash) && src.last_hash !== hash;
       await q.run(`UPDATE scout_sources SET last_hash=?, last_checked=datetime('now') WHERE id=?`, [hash, src.id]);

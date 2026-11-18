@@ -447,6 +447,48 @@ async function migrate(b: Backend) {
     }
     await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v6_instrumentl', 'done')`);
   }
+
+  // One-time upgrade v7 (Instrumentl head-to-head test): four more Instrumentl
+  // Oklahoma pages that carry funders the first eight missed (Chapman, Bernsen,
+  // Mabee, Cox Foundation, BOK), plus funder records for the strong fits the
+  // team's own Instrumentl research surfaced.
+  const flag7 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v7_instrumentl_gaps'`);
+  if (!flag7) {
+    const v7Sources: [string, string, string][] = [
+      ["Instrumentl — OK corporate grants", "https://www.instrumentl.com/browse-grants/oklahoma/corporate-grants-for-nonprofits", "aggregator"],
+      ["Instrumentl — OK children's grants", "https://www.instrumentl.com/browse-grants/oklahoma/grants-for-children", "aggregator"],
+      ["Instrumentl — OK healthcare program grants", "https://www.instrumentl.com/browse-grants/oklahoma/grants-for-nonprofit-healthcare-programs", "aggregator"],
+      ["Instrumentl — OK public health grants", "https://www.instrumentl.com/browse-grants/oklahoma/grants-for-public-health", "aggregator"],
+    ];
+    for (const s of v7Sources) {
+      await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, s);
+    }
+    const v7Funders = [
+      { name: "Mary K. Chapman Foundation", type: "foundation", tier: 1, focus: "Tulsa funder of health, human services, and education", award_range: "$1K – $10M", projects: "Medical center, Early Learning Center — start with the eligibility assessment in their grant portal (grantinterface.com, key: chapmanfoundation)", website: "" },
+      { name: "Ardmore Institute of Health", type: "foundation", tier: 1, focus: "Primary care, whole-person care, obesity care, food-as-medicine, underserved communities", award_range: "Unspecified", projects: "Clinic + fitness center + food programs are a direct match. LOIs are invitation-gated — contact AIH before the cycle to request an invitation", website: "https://ardmoreinstitute.org" },
+      { name: "Grace & Franklin Bernsen Foundation", type: "foundation", tier: 1, focus: "Tulsa-area nonprofits only", award_range: "Unspecified", projects: "Rolling — check guidelines page for board meeting dates", website: "https://www.bernsen.org" },
+      { name: "J.E. & L.E. Mabee Foundation", type: "foundation", tier: 1, focus: "Capital projects: construction, renovation, major equipment — challenge grants (~20% of cost after 40% raised elsewhere); no operating support", award_range: "Up to $2M", projects: "Food distribution buildout, outdoor recreation construction — quarterly deadlines (Mar/Jun/Sep/Dec 1)", website: "https://www.mabeefoundation.com" },
+      { name: "Quest Diagnostics Foundation", type: "corporate", tier: 2, focus: "Community health and care-access programs with measurable outcomes", award_range: "$10K", projects: "Medical center community health programs — annual Healthy Communities Champions cycle", website: "https://www.questdiagnostics.com/our-company/foundation" },
+      { name: "GoodRx Helps", type: "corporate", tier: 2, focus: "Healthcare access and education for under-resourced groups", award_range: "Up to $250K", projects: "Clinic access programs — note: reportedly requires ~$250K+ operating budget", website: "" },
+      { name: "Telligen Community Initiative", type: "foundation", tier: 2, focus: "Social drivers of health — Oklahoma is an eligible state", award_range: "Up to $150K", projects: "Whole-family model (health + food + learning) as social-drivers programming; short pre-application", website: "" },
+      { name: "Tulsa Area United Way", type: "foundation", tier: 2, focus: "Social Innovations grants for new approaches (not ongoing operations)", award_range: "$40K", projects: "A new cross-program pilot (e.g. clinic ↔ Early Learning Center referral loop)", website: "https://tauw.org" },
+      { name: "Delta Dental of Oklahoma Foundation", type: "healthcare", tier: 2, focus: "Free/low-cost dental care, dental education, oral health statewide", award_range: "Unspecified", projects: "Oral-health screenings at the clinic and Early Learning Center", website: "https://www.deltadentalok.org" },
+      { name: "ONEOK Foundation", type: "corporate", tier: 2, focus: "Tulsa-based: safety and education where employees live and work", award_range: "Unspecified", projects: "Lead with the Early Learning Center", website: "https://www.oneok.com" },
+      { name: "BOKF Foundation (Bank of Oklahoma)", type: "corporate", tier: 2, focus: "Tulsa-headquartered bank — natural local ask", award_range: "Unspecified", projects: "Ask a BOK banker or community-relations contact for the request form", website: "" },
+      { name: "Costco Wholesale Charitable", type: "corporate", tier: 3, focus: "Children, education, health & human services where Costco has warehouses", award_range: "Unspecified", projects: "Simple online form", website: "" },
+      { name: "The Molina Foundation", type: "foundation", tier: 3, focus: "Book Buddies: donated children's books (in-kind)", award_range: "In-kind", projects: "Low-effort win for the Early Learning Center", website: "" },
+    ];
+    for (const f of v7Funders) {
+      const exists = await b.get<{ id: number }>(`SELECT id FROM funders WHERE name=?`, [f.name]);
+      if (!exists) {
+        await b.run(
+          `INSERT INTO funders (name, type, tier, focus, award_range, projects, website) VALUES (@name, @type, @tier, @focus, @award_range, @projects, @website)`,
+          f
+        );
+      }
+    }
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v7_instrumentl_gaps', 'done')`);
+  }
 }
 
 async function addKeywords(b: Backend, keywords: string[]) {
