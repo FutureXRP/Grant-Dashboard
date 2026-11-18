@@ -489,6 +489,35 @@ async function migrate(b: Backend) {
     }
     await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v7_instrumentl_gaps', 'done')`);
   }
+
+  // One-time upgrade v8: re-point the watched pages the status report flagged
+  // as 404/thin (sites reorganized, or the original best-guess URL was wrong)
+  // to researched current URLs, and watch OSDH's Rural Health Transformation
+  // Program funding page (an official page; discovery's top lead).
+  const flag8 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v8_url_fixes'`);
+  if (!flag8) {
+    const repoints: [string, string][] = [
+      ["Sarkeys Foundation — grants", "https://sarkeys.org/grant-guidelines/"],
+      ["Tulsa Community Foundation — grants", "https://tulsacf.org/nonprofits/"],
+      ["Lowe's Hometowns — community impact", "https://www.lowes.com/hometowns"],
+      ["Blue Cross Blue Shield of Oklahoma — community", "https://www.bcbsok.com/about-us/community-giving"],
+      ["ODMHSAS — procurement & funding", "https://oklahoma.gov/odmhsas/about/public-information/grant-and-solicitations.html"],
+      ["Oklahoma Dept. of Commerce — community funding", "https://www.okcommerce.gov/community-development/community-development-block-grant-programs/"],
+      ["Oklahoma State Dept. of Health — grants & procurement", "https://oklahoma.gov/health/about-us/procurement/bid-opportunities.html"],
+      ["Oklahoma Tourism & Recreation — grants (LWCF)", "https://otrd.travelok.com/grants-overview/"],
+      ["Oklahoma Human Services — procurement & grants", "https://oklahoma.gov/okdhs.html"],
+      ["Zarrow Family Foundations", "https://zarrow.org/"],
+    ];
+    for (const [name, url] of repoints) {
+      await b.run(`UPDATE scout_sources SET url=?, last_hash='' WHERE name=?`, [url, name]);
+    }
+    await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, ?)`, [
+      "OSDH — Rural Health Transformation Program funding",
+      "https://oklahoma.gov/health/rhtpfunding",
+      "state",
+    ]);
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v8_url_fixes', 'done')`);
+  }
 }
 
 async function addKeywords(b: Backend, keywords: string[]) {

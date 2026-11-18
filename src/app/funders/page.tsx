@@ -1,5 +1,6 @@
 import { q } from "@/lib/db";
 import { updateFunderNotes } from "@/lib/actions";
+import ImportGrantsPanel from "@/components/ImportGrantsPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +35,7 @@ export default async function Funders({
       <p className="text-sm text-gray-500">
         Seeded from the playbook (Sections 4–6). Tier 1 = pursue every year. Verify current priorities and windows before applying.
       </p>
+      <ImportGrantsPanel />
       {TYPE_ORDER.map((type) => {
         const group = funders.filter((f) => f.type === type);
         if (group.length === 0) return null;
