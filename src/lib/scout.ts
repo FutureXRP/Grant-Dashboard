@@ -345,7 +345,7 @@ async function runWatch(errors: string[], tick: (label: string) => Promise<void>
       if (text) {
         const parsed = JSON.parse(text) as { summary: string; items: Omit<WatchFinding, "isNew" | "source_url">[] };
         summary = parsed.summary;
-        const urlByName = new Map(sources.map((s) => [s.name, s.url]));
+        const resolveSourceUrl = sourceUrlResolver(sources);
         const dismissedKeys = new Set((await listDismissed()).map((r) => r.key));
         const seen = new Set(
           (await q.all<{ number: string }>(`SELECT number FROM scout_seen`)).map((r) => r.number)
@@ -356,7 +356,7 @@ async function runWatch(errors: string[], tick: (label: string) => Promise<void>
           const isNew = !seen.has(key);
           await q.run(`INSERT OR IGNORE INTO scout_seen (number) VALUES (?)`, [key]);
           if (!dismissedKeys.has(key) && !deadlinePassed(item.deadline)) {
-            findings.push({ ...item, key, source_url: urlByName.get(item.source) ?? "", isNew });
+            findings.push({ ...item, key, source_url: resolveSourceUrl(item.source), isNew });
           }
         }
       }
@@ -565,6 +565,48 @@ export async function runScout(): Promise<ScoutReport> {
   }
 }
 
+// The extractor reports each finding's source by name, and that name does not
+// always exactly match a watched source's stored name ("Instrumentl — OK
+// children's / corporate / early childhood"). Resolve fuzzily: exact name,
+// then normalized containment either way, so every finding keeps a live link
+// back to the page it was found on.
+export function sourceUrlResolver(sources: { name: string; url: string }[]): (name: string) => string {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const tokens = (s: string) =>
+    new Set(s.toLowerCase().replace(/[^a-z0-9\s]+/g, " ").split(/\s+/).filter((w) => w.length > 2));
+  const exact = new Map(sources.map((s) => [s.name, s.url]));
+  return (name: string) => {
+    const hit = exact.get(name);
+    if (hit) return hit;
+    const n = norm(name);
+    if (!n) return "";
+    // Tier 2: normalized containment either way.
+    let best = "";
+    let bestLen = 0;
+    for (const s of sources) {
+      const sn = norm(s.name);
+      if (sn && (n.includes(sn) || sn.includes(n)) && sn.length > bestLen) {
+        best = s.url;
+        bestLen = sn.length;
+      }
+    }
+    if (best) return best;
+    // Tier 3: most shared words (needs at least 2) — handles mashed-up names
+    // like "Instrumentl — OK children's / corporate / early childhood".
+    const nt = tokens(name);
+    let bestScore = 1;
+    for (const s of sources) {
+      let score = 0;
+      for (const t of tokens(s.name)) if (nt.has(t)) score++;
+      if (score > bestScore) {
+        best = s.url;
+        bestScore = score;
+      }
+    }
+    return best;
+  };
+}
+
 export async function latestReport(): Promise<ScoutReport | null> {
   const row = await q.get<{ report: string }>(`SELECT report FROM scout_reports ORDER BY id DESC LIMIT 1`);
   if (!row) return null;
@@ -580,6 +622,18 @@ export async function latestReport(): Promise<ScoutReport | null> {
     report.watch.findings = (report.watch.findings ?? []).filter(
       (f) => !dismissed.has(f.key || watchKey(f.source, f.title)) && !deadlinePassed(f.deadline)
     );
+    // Backfill links for findings saved without one (the extractor's source
+    // name didn't exactly match a watched source) so the detail panel's
+    // "Open the notice" button always has somewhere to go.
+    if (report.watch.findings.some((f) => !f.url && !f.source_url)) {
+      try {
+        const sources = await q.all<{ name: string; url: string }>(`SELECT name, url FROM scout_sources`);
+        const resolve = sourceUrlResolver(sources);
+        for (const f of report.watch.findings) {
+          if (!f.url && !f.source_url) f.source_url = resolve(f.source);
+        }
+      } catch { /* backfill is best-effort */ }
+    }
   }
   report.totalFound = report.hits.length;
   report.newCount = report.hits.filter((h) => h.isNew).length;
