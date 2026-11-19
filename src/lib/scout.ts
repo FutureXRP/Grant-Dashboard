@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { q } from "./db";
 import { aiConfigured } from "./ai";
+import { TARGETING, DEFAULT_EXCLUDES, isExcluded, decodeEntities } from "./targeting";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 
@@ -79,7 +80,7 @@ const GRADE_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-const SCOUT_SYSTEM = `You grade federal funding opportunities for a small nonprofit, from titles and agency names only (full notices are not fetched at this stage). Grades:
+const SCOUT_SYSTEM = `You grade federal funding opportunities for a small nonprofit, from titles and agency names only (full notices are not fetched at this stage).\n\n${TARGETING}\n\nGrades:
 - strong_fit: squarely matches the organization's programs AND a plain 501(c)(3) is almost certainly eligible.
 - possible_fit: plausibly relevant; worth opening the notice.
 - unlikely: technically open to nonprofits but a poor mission match or almost certainly out of reach (e.g. research-institution programs).
@@ -141,7 +142,7 @@ const WATCH_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-const WATCH_SYSTEM = `You read the text of state-agency and foundation web pages for a small nonprofit and extract ACTUAL funding opportunities.
+const WATCH_SYSTEM = `You read the text of state-agency and foundation web pages for a small nonprofit and extract ACTUAL funding opportunities.\n\n${TARGETING}
 
 Extract an item ONLY when the page announces a specific opportunity: an open or upcoming grant cycle, RFP, letter-of-inquiry window, or application period. Do NOT extract general program descriptions, past awards, "we fund these areas" boilerplate, or news items. If a page contains no actual opportunity, extract nothing from it.
 
@@ -373,6 +374,19 @@ export async function getKeywords(): Promise<string[]> {
   return (row?.value || "").split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
+export async function getExcludes(): Promise<string[]> {
+  const row = await q.get<{ value: string }>(`SELECT value FROM settings WHERE key='scout_exclude'`);
+  if (row === undefined || row === null) return DEFAULT_EXCLUDES;
+  return row.value.split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+export async function setExcludes(excludes: string) {
+  await q.run(
+    `INSERT INTO settings (key, value) VALUES ('scout_exclude', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    [excludes]
+  );
+}
+
 export async function setKeywords(keywords: string) {
   await q.run(
     `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
@@ -384,7 +398,10 @@ async function searchGrantsGov(keyword: string): Promise<Omit<ScoutHit, "keyword
   const res = await fetch("https://api.grants.gov/v1/api/search2", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ keyword, rows: 25, oppStatuses: "forecasted|posted" }),
+    // eligibilities "12" = nonprofits with 501(c)(3) status other than
+    // institutions of higher education — filters out gov-only/IHE/foreign
+    // programs at the source.
+    body: JSON.stringify({ keyword, rows: 25, oppStatuses: "forecasted|posted", eligibilities: "12" }),
     signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) throw new Error(`Grants.gov returned ${res.status} for "${keyword}"`);
@@ -398,8 +415,8 @@ async function searchGrantsGov(keyword: string): Promise<Omit<ScoutHit, "keyword
     .filter((h) => h.number && h.title)
     .map((h) => ({
       number: String(h.number),
-      title: h.title ?? "",
-      agency: h.agencyName ?? h.agency ?? "",
+      title: decodeEntities(h.title ?? ""),
+      agency: decodeEntities(h.agencyName ?? h.agency ?? ""),
       openDate: h.openDate ?? "",
       closeDate: h.closeDate ?? "",
       status: h.oppStatus ?? "",
@@ -439,10 +456,14 @@ export async function runScout(): Promise<ScoutReport> {
     }
   }
 
-  // Skip anything whose deadline already passed, and anything dismissed.
+  // Skip anything whose deadline already passed, anything dismissed, and
+  // anything matching the exclude-word list (deterministic noise filter —
+  // loose keyword matching otherwise returns marine mammals for "childcare
+  // facilities").
   const dismissed = new Set((await listDismissed()).map((r) => r.key));
+  const excludes = await getExcludes();
   const hits = Array.from(byNumber.values()).filter(
-    (h) => !dismissed.has(h.number) && !deadlinePassed(h.closeDate)
+    (h) => !dismissed.has(h.number) && !deadlinePassed(h.closeDate) && !isExcluded(h.title, h.agency, excludes)
   );
 
   // Mark new vs. previously seen, then record all as seen.
@@ -460,39 +481,44 @@ export async function runScout(): Promise<ScoutReport> {
       const profile = (await q.get<{
         name: string; legal_status: string; service_area: string; programs: string; populations: string;
       }>(`SELECT * FROM org_profile WHERE id=1`))!;
-      const list = hits
-        .slice(0, 100)
-        .map((h) => `${h.number} | ${h.agency} | ${h.title} | closes ${h.closeDate || "TBD"}${h.isNew ? " | NEW today" : ""}`)
-        .join("\n");
       const client = new Anthropic();
-      const response = await client.messages.create({
-        model: MODEL,
-        max_tokens: 8000,
-        system: [{ type: "text", text: SCOUT_SYSTEM, cache_control: { type: "ephemeral" } }],
-        output_config: { format: { type: "json_schema", schema: GRADE_SCHEMA } },
-        messages: [
-          {
-            role: "user",
-            content: `Organization: ${profile.name} (${profile.legal_status}). Service area: ${profile.service_area}. Programs: ${profile.programs}. Populations: ${profile.populations}.\n\nGrade every opportunity:\n${list}`,
-          },
-        ],
-      });
-      const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
-      if (text) {
-        const parsed = JSON.parse(text) as {
-          summary: string;
-          items: { number: string; grade: ScoutHit["grade"]; reason: string }[];
-        };
-        const gradeByNumber = new Map(parsed.items.map((i) => [i.number, i]));
-        for (const h of hits) {
-          const g = gradeByNumber.get(h.number);
-          if (g) {
-            h.grade = g.grade;
-            h.reason = g.reason;
+      // Grade EVERYTHING, 100 per call — ungraded hits used to slip past the
+      // fit filter unlabeled.
+      for (let start = 0; start < hits.length; start += 100) {
+        const batch = hits.slice(start, start + 100);
+        if (start > 0) await tick(`AI grading federal results (${start}/${hits.length})…`);
+        const list = batch
+          .map((h) => `${h.number} | ${h.agency} | ${h.title} | closes ${h.closeDate || "TBD"}${h.isNew ? " | NEW today" : ""}`)
+          .join("\n");
+        const response = await client.messages.create({
+          model: MODEL,
+          max_tokens: 8000,
+          system: [{ type: "text", text: SCOUT_SYSTEM, cache_control: { type: "ephemeral" } }],
+          output_config: { format: { type: "json_schema", schema: GRADE_SCHEMA } },
+          messages: [
+            {
+              role: "user",
+              content: `Organization: ${profile.name} (${profile.legal_status}). Service area: ${profile.service_area}. Programs: ${profile.programs}. Populations: ${profile.populations}.\n\nGrade every opportunity:\n${list}`,
+            },
+          ],
+        });
+        const text = response.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+        if (text) {
+          const parsed = JSON.parse(text) as {
+            summary: string;
+            items: { number: string; grade: ScoutHit["grade"]; reason: string }[];
+          };
+          const gradeByNumber = new Map(parsed.items.map((i) => [i.number, i]));
+          for (const h of batch) {
+            const g = gradeByNumber.get(h.number);
+            if (g) {
+              h.grade = g.grade;
+              h.reason = g.reason;
+            }
           }
+          if (start === 0) summary = parsed.summary;
+          graded = true;
         }
-        summary = parsed.summary;
-        graded = true;
       }
     } catch (e) {
       errors.push(`Grading failed: ${e instanceof Error ? e.message : "unknown error"} — showing ungraded results.`);

@@ -1,5 +1,5 @@
 import { revalidatePath } from "next/cache";
-import { latestReport, getKeywords, setKeywords, listSources, addSource, updateSource, deleteSource, toggleSource, listDismissed } from "@/lib/scout";
+import { latestReport, getKeywords, setKeywords, getExcludes, setExcludes, listSources, addSource, updateSource, deleteSource, toggleSource, listDismissed } from "@/lib/scout";
 import { latestDiscovery } from "@/lib/discover";
 import { aiConfigured } from "@/lib/ai";
 import ScoutPanel from "@/components/ScoutPanel";
@@ -10,6 +10,12 @@ export const dynamic = "force-dynamic";
 async function saveKeywordsAction(formData: FormData) {
   "use server";
   await setKeywords(String(formData.get("keywords") || ""));
+  revalidatePath("/scout");
+}
+
+async function saveExcludesAction(formData: FormData) {
+  "use server";
+  await setExcludes(String(formData.get("excludes") || ""));
   revalidatePath("/scout");
 }
 
@@ -48,6 +54,7 @@ export default async function ScoutPage() {
   const sources = await listSources();
   const dismissed = await listDismissed();
   const discovery = await latestDiscovery();
+  const excludes = (await getExcludes()).join("\n");
 
   return (
     <div className="space-y-4">
@@ -62,9 +69,11 @@ export default async function ScoutPage() {
       <ScoutPanel
         initialReport={report}
         initialKeywords={keywords}
+        initialExcludes={excludes}
         sources={sources}
         initialDismissed={dismissed}
         saveKeywords={saveKeywordsAction}
+        saveExcludes={saveExcludesAction}
         addSource={addSourceAction}
         editSource={editSourceAction}
         deleteSource={deleteSourceAction}

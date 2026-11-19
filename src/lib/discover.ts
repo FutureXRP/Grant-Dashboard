@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { q } from "./db";
-import { hashText } from "./scout";
+import { hashText, deadlinePassed } from "./scout";
+import { TARGETING } from "./targeting";
 import { aiConfigured } from "./ai";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
@@ -63,6 +64,8 @@ const PARSE_SCHEMA: Record<string, unknown> = {
 };
 
 const RESEARCH_SYSTEM = `You are a grant prospect researcher for a small nonprofit, doing the kind of hunting a resourceful development director does by hand: corporate giving programs (retailers, utilities, banks, telecoms with local presence), quasi-public funders, family foundations, and state programs — NOT just federal notices.
+
+${TARGETING}
 
 Method:
 - Use web search strategically (you have a limited number of searches). Prioritize funder types the organization's current watch list misses, and funders ACTIVE in the organization's specific geography.
@@ -196,7 +199,9 @@ export async function latestDiscovery(): Promise<DiscoveryReport | null> {
     const dismissed = new Set(
       (await q.all<{ key: string }>(`SELECT key FROM scout_dismissed`)).map((r) => r.key)
     );
-    report.items = (report.items ?? []).filter((i) => !dismissed.has(i.key));
+    // Same read-time rules as the scout report: dismissed leads never return,
+    // and a lead whose stated deadline has passed leaves the page on its own.
+    report.items = (report.items ?? []).filter((i) => !dismissed.has(i.key) && !deadlinePassed(i.deadline));
     return report;
   } catch {
     return null;

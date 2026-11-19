@@ -63,7 +63,9 @@ type GradeFilter = "all" | "eligible" | "strong";
 type SortBy = "fit" | "deadline" | "new";
 
 function gradeOk(filter: GradeFilter, grade?: string): boolean {
-  if (filter === "all" || !grade) return true; // ungraded stays visible
+  if (filter === "all") return true;
+  // Ungraded hits are unvetted noise — only the "all" view shows them.
+  if (!grade) return false;
   if (filter === "strong") return grade === "strong_fit";
   return grade === "strong_fit" || grade === "possible_fit";
 }
@@ -71,9 +73,11 @@ function gradeOk(filter: GradeFilter, grade?: string): boolean {
 export default function ScoutPanel({
   initialReport,
   initialKeywords,
+  initialExcludes,
   sources,
   initialDismissed,
   saveKeywords,
+  saveExcludes,
   addSource,
   editSource,
   deleteSource,
@@ -81,9 +85,11 @@ export default function ScoutPanel({
 }: {
   initialReport: ScoutReport | null;
   initialKeywords: string;
+  initialExcludes: string;
   sources: WatchSource[];
   initialDismissed: { key: string; title: string }[];
   saveKeywords: (formData: FormData) => Promise<void>;
+  saveExcludes: (formData: FormData) => Promise<void>;
   addSource: (formData: FormData) => Promise<void>;
   editSource: (formData: FormData) => Promise<void>;
   deleteSource: (formData: FormData) => Promise<void>;
@@ -283,7 +289,7 @@ export default function ScoutPanel({
           >
             <option value="eligible">strong + possible fit</option>
             <option value="strong">strong fit only</option>
-            <option value="all">all grades</option>
+            <option value="all">all (incl. ungraded)</option>
           </select>
         </label>
         <label className="flex items-center gap-1.5 text-xs text-gray-600">
@@ -554,6 +560,19 @@ export default function ScoutPanel({
           <p className="text-xs text-gray-500">One keyword phrase per line. The scout runs every phrase against Grants.gov and merges the results.</p>
           <textarea name="keywords" rows={8} defaultValue={initialKeywords} className="input font-mono text-xs" />
           <button className="btn-secondary">Save keywords</button>
+        </form>
+      </details>
+
+      <details className="card">
+        <summary className="cursor-pointer p-3 text-sm font-medium">Exclude words ({initialExcludes.split("\n").filter(Boolean).length})</summary>
+        <form action={saveExcludes} className="px-4 pb-4 space-y-2">
+          <p className="text-xs text-gray-500">
+            One word or phrase per line. Any federal result whose title or agency contains one of these is dropped
+            before grading — the noise filter for Grants.gov&apos;s loose matching (marine mammals, embassies, lab
+            research…). Add a line whenever a junk theme keeps showing up.
+          </p>
+          <textarea name="excludes" rows={8} defaultValue={initialExcludes} className="input font-mono text-xs" />
+          <button className="btn-secondary">Save exclude words</button>
         </form>
       </details>
     </div>

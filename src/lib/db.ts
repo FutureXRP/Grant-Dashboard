@@ -1,5 +1,6 @@
 import path from "path";
 import { SEED_FUNDERS, SEED_READINESS, SEED_DOCUMENTS, SEED_NARRATIVES, SEED_PROFILE } from "./seed";
+import { DEFAULT_EXCLUDES } from "./targeting";
 import { PROPOSAL_SECTIONS } from "./stages";
 
 // Async database layer with two interchangeable backends:
@@ -550,6 +551,45 @@ async function migrate(b: Backend) {
       "state",
     ]);
     await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v8_url_fixes', 'done')`);
+  }
+
+  // One-time upgrade v9 (targeting overhaul): REPLACE the keyword list with
+  // phrases matching the organization's actual service lanes — the old broad
+  // list ("childcare facilities", "youth development") pulled in marine-mammal
+  // and foreign-embassy noise via loose matching — and seed the editable
+  // exclude-word list.
+  const flag9 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v9_targeting'`);
+  if (!flag9) {
+    const laneKeywords = [
+      "early childhood education",
+      "child care center",
+      "school readiness",
+      "primary care",
+      "community health",
+      "behavioral health",
+      "diabetes prevention",
+      "underserved children",
+      "family support services",
+      "maternal and child health",
+      "playground",
+      "outdoor recreation",
+      "physical activity",
+      "youth sports",
+      "food pantry",
+      "food insecurity",
+      "food distribution",
+      "community facilities",
+      "Native American families",
+      "tribal health",
+    ].join("\n");
+    await b.run(
+      `INSERT INTO settings (key, value) VALUES ('scout_keywords', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+      [laneKeywords]
+    );
+    await b.run(`INSERT OR IGNORE INTO settings (key, value) VALUES ('scout_exclude', ?)`, [
+      DEFAULT_EXCLUDES.join("\n"),
+    ]);
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v9_targeting', 'done')`);
   }
 }
 
