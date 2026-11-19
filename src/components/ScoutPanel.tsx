@@ -5,19 +5,15 @@ import Link from "next/link";
 import type { ScoutReport, ScoutHit, WatchFinding, WatchSource, ScoutProgress } from "@/lib/scout";
 import { LANES, LANE_LABEL } from "@/lib/targeting";
 import { deadlineColor } from "@/lib/stages";
-
-const GRADE_STYLE: Record<string, string> = {
-  strong_fit: "bg-green-100 text-green-800",
-  possible_fit: "bg-blue-100 text-blue-800",
-  unlikely: "bg-gray-100 text-gray-600",
-  not_eligible: "bg-red-100 text-red-700",
-};
-const GRADE_LABEL: Record<string, string> = {
-  strong_fit: "strong fit",
-  possible_fit: "possible fit",
-  unlikely: "unlikely",
-  not_eligible: "not eligible",
-};
+import {
+  GRADE_STYLE,
+  GRADE_LABEL,
+  ROW_GRID,
+  deadlineTime,
+  daysFromText,
+  DetailPanel,
+  type Detail,
+} from "@/components/GrantDetail";
 
 const KIND_LABEL: Record<string, string> = {
   state: "Oklahoma state",
@@ -37,40 +33,9 @@ function fitRank(grade?: string): number {
   return grade ? (FIT_RANK[grade] ?? 4) : 4;
 }
 
-// Parse a deadline for sorting: MM/DD/YYYY, YYYY-MM-DD, or "Month D, YYYY"
-// anywhere in the text. Unparseable ("Rolling", "") sorts last.
-function deadlineTime(s: string): number {
-  const str = (s || "").trim();
-  if (str) {
-    let m = str.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
-    if (m) {
-      const t = Date.parse(`${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`);
-      if (!Number.isNaN(t)) return t;
-    }
-    m = str.match(/\b\d{4}-\d{2}-\d{2}\b/);
-    if (m) {
-      const t = Date.parse(m[0]);
-      if (!Number.isNaN(t)) return t;
-    }
-    m = str.match(/\b([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\b/);
-    if (m) {
-      const t = Date.parse(`${m[1]} ${m[2]}, ${m[3]}`);
-      if (!Number.isNaN(t)) return t;
-    }
-  }
-  return Number.MAX_SAFE_INTEGER;
-}
-
 type GradeFilter = "all" | "eligible" | "strong";
 type SortBy = "fit" | "deadline" | "new";
 type DueFilter = "any" | "30" | "60" | "90";
-
-// Days until a free-text deadline, or null when unparseable.
-function daysFromText(s: string): number | null {
-  const t = deadlineTime(s);
-  if (t === Number.MAX_SAFE_INTEGER) return null;
-  return Math.ceil((t - Date.now()) / 86400000);
-}
 
 function dueOk(filter: DueFilter, deadlineText: string): boolean {
   if (filter === "any") return true;
@@ -81,26 +46,6 @@ function dueOk(filter: DueFilter, deadlineText: string): boolean {
 function laneOk(filter: string, lane?: string): boolean {
   return filter === "all" || lane === filter;
 }
-
-// One normalized shape for the detail popup, built from either list.
-type Detail = {
-  id: string;
-  title: string;
-  sub: string;
-  url: string;
-  number?: string;
-  status?: string;
-  deadlineText: string;
-  days: number | null;
-  grade?: string;
-  reason?: string;
-  lane?: string;
-  keyword?: string;
-  details?: string;
-  isNew: boolean;
-  pipelineHref: string;
-  dismissPayload: { number?: string; source?: string; title: string };
-};
 
 function gradeOk(filter: GradeFilter, grade?: string): boolean {
   if (filter === "all") return true;
@@ -470,7 +415,7 @@ export default function ScoutPanel({
 
       {report && (
         <div className="card divide-y">
-          <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_9rem_8rem_5.5rem_8rem] gap-3 items-center px-3 py-2 bg-gray-50 border-b border-gray-200 rounded-t-xl text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+          <div className={`sticky top-0 z-10 ${ROW_GRID} px-3 py-2 bg-gray-50 border-b border-gray-200 rounded-t-xl text-[10px] font-semibold uppercase tracking-wide text-gray-500`}>
             <span>Grant</span>
             <span>Lane</span>
             <span className="text-right">Deadline</span>
@@ -484,7 +429,7 @@ export default function ScoutPanel({
             <div
               key={h.number}
               onClick={() => setDetail(hitDetail(h))}
-              className={"grid grid-cols-[minmax(0,1fr)_9rem_8rem_5.5rem_8rem] gap-3 items-center px-3 py-2.5 cursor-pointer hover:bg-gray-50 " + (detail?.id === h.number ? "bg-emerald-50" : "")}
+              className={`${ROW_GRID} px-3 py-2.5 cursor-pointer hover:bg-gray-50 ` + (detail?.id === h.number ? "bg-emerald-50" : "")}
             >
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -549,7 +494,7 @@ export default function ScoutPanel({
           )}
           {report.watch.findings.length > 0 && (
             <div className="card divide-y">
-              <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_9rem_8rem_5.5rem_8rem] gap-3 items-center px-3 py-2 bg-gray-50 border-b border-gray-200 rounded-t-xl text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+              <div className={`sticky top-0 z-10 ${ROW_GRID} px-3 py-2 bg-gray-50 border-b border-gray-200 rounded-t-xl text-[10px] font-semibold uppercase tracking-wide text-gray-500`}>
                 <span>Opportunity</span>
                 <span>Lane</span>
                 <span className="text-right">Deadline</span>
@@ -560,7 +505,7 @@ export default function ScoutPanel({
                   <div
                     key={f.key || i}
                     onClick={() => setDetail(findingDetail(f))}
-                    className={"grid grid-cols-[minmax(0,1fr)_9rem_8rem_5.5rem_8rem] gap-3 items-center px-3 py-2.5 cursor-pointer hover:bg-gray-50 " + (detail?.id === (f.key || f.title) ? "bg-emerald-50" : "")}
+                    className={`${ROW_GRID} px-3 py-2.5 cursor-pointer hover:bg-gray-50 ` + (detail?.id === (f.key || f.title) ? "bg-emerald-50" : "")}
                   >
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -741,93 +686,14 @@ export default function ScoutPanel({
       </details>
 
       {/* Grant detail panel — docked to the right edge, Instrumentl-style */}
-      {detail && (
-        <aside className="no-print fixed inset-y-0 right-0 z-50 w-full sm:w-[460px] bg-white border-l border-gray-200 shadow-2xl overflow-y-auto">
-            <div className="p-6 space-y-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap mb-1">
-                    {detail.isNew && (
-                      <span className="rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px] font-bold">NEW</span>
-                    )}
-                    {detail.grade && (
-                      <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[detail.grade]}`}>
-                        {GRADE_LABEL[detail.grade]}
-                      </span>
-                    )}
-                    {detail.lane && (
-                      <span className="rounded bg-gray-100 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
-                        {LANE_LABEL[detail.lane] ?? detail.lane}
-                      </span>
-                    )}
-                  </div>
-                  <h2 className="text-lg font-bold leading-snug">{detail.title}</h2>
-                  <p className="text-sm text-gray-500">{detail.sub}</p>
-                </div>
-                <button
-                  onClick={() => setDetail(null)}
-                  className="shrink-0 rounded border border-gray-200 px-2 py-1 text-sm text-gray-400 hover:text-gray-700"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                <div>
-                  <div className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Deadline</div>
-                  <div>
-                    {detail.deadlineText}
-                    {detail.days !== null && (
-                      <span className={`ml-2 rounded px-2 py-0.5 text-[10px] font-bold ${deadlineColor(detail.days)}`}>
-                        {detail.days < 0 ? "passed" : `${detail.days} days left`}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {detail.number && (
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Opportunity #</div>
-                    <div className="font-mono text-xs">{detail.number}{detail.status ? ` · ${detail.status}` : ""}</div>
-                  </div>
-                )}
-                {detail.keyword && (
-                  <div>
-                    <div className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Matched keyword</div>
-                    <div>“{detail.keyword}”</div>
-                  </div>
-                )}
-              </div>
-
-              {detail.details && <p className="text-sm text-gray-700">{detail.details}</p>}
-              {detail.reason && (
-                <div className="rounded bg-gray-50 border border-gray-100 p-3 text-sm">
-                  <div className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-0.5">Why this grade</div>
-                  {detail.reason}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 flex-wrap pt-1">
-                {detail.url && (
-                  <a href={detail.url} target="_blank" rel="noreferrer" className="btn text-sm">
-                    Open the notice ↗
-                  </a>
-                )}
-                <Link href={detail.pipelineHref} className="btn-secondary text-sm">
-                  + Add to pipeline
-                </Link>
-                <button
-                  onClick={() => {
-                    dismiss(detail.dismissPayload);
-                    setDetail(null);
-                  }}
-                  className="btn-secondary text-sm text-red-600"
-                >
-                  Dismiss forever
-                </button>
-              </div>
-            </div>
-        </aside>
-      )}
+      <DetailPanel
+        detail={detail}
+        onClose={() => setDetail(null)}
+        onDismiss={(d) => {
+          dismiss(d.dismissPayload);
+          setDetail(null);
+        }}
+      />
     </div>
   );
 }
