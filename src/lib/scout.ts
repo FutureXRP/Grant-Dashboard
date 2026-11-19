@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { q } from "./db";
 import { aiConfigured } from "./ai";
-import { TARGETING, DEFAULT_EXCLUDES, isExcluded, decodeEntities } from "./targeting";
+import { TARGETING, DEFAULT_EXCLUDES, LANE_KEYS, isExcluded, decodeEntities } from "./targeting";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
 
@@ -17,6 +17,7 @@ export type ScoutHit = {
   isNew: boolean;
   grade?: "strong_fit" | "possible_fit" | "unlikely" | "not_eligible";
   reason?: string;
+  lane?: string;
 };
 
 export type WatchSource = {
@@ -38,6 +39,7 @@ export type WatchFinding = {
   isNew: boolean;
   grade?: "strong_fit" | "possible_fit" | "unlikely" | "not_eligible";
   reason?: string;
+  lane?: string;
 };
 
 export type WatchResult = {
@@ -70,8 +72,9 @@ const GRADE_SCHEMA: Record<string, unknown> = {
           number: { type: "string" },
           grade: { type: "string", enum: ["strong_fit", "possible_fit", "unlikely", "not_eligible"] },
           reason: { type: "string" },
+          lane: { type: "string", enum: LANE_KEYS },
         },
-        required: ["number", "grade", "reason"],
+        required: ["number", "grade", "reason", "lane"],
         additionalProperties: false,
       },
     },
@@ -132,8 +135,9 @@ const WATCH_SCHEMA: Record<string, unknown> = {
           url: { type: "string" },
           grade: { type: "string", enum: ["strong_fit", "possible_fit", "unlikely", "not_eligible"] },
           reason: { type: "string" },
+          lane: { type: "string", enum: LANE_KEYS },
         },
-        required: ["source", "title", "deadline", "details", "url", "grade", "reason"],
+        required: ["source", "title", "deadline", "details", "url", "grade", "reason", "lane"],
         additionalProperties: false,
       },
     },
@@ -506,7 +510,7 @@ export async function runScout(): Promise<ScoutReport> {
         if (text) {
           const parsed = JSON.parse(text) as {
             summary: string;
-            items: { number: string; grade: ScoutHit["grade"]; reason: string }[];
+            items: { number: string; grade: ScoutHit["grade"]; reason: string; lane?: string }[];
           };
           const gradeByNumber = new Map(parsed.items.map((i) => [i.number, i]));
           for (const h of batch) {
@@ -514,6 +518,7 @@ export async function runScout(): Promise<ScoutReport> {
             if (g) {
               h.grade = g.grade;
               h.reason = g.reason;
+              h.lane = g.lane;
             }
           }
           if (start === 0) summary = parsed.summary;

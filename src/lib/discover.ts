@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { q } from "./db";
 import { hashText, deadlinePassed } from "./scout";
-import { TARGETING } from "./targeting";
+import { TARGETING, LANE_KEYS } from "./targeting";
 import { aiConfigured } from "./ai";
 
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-opus-4-8";
@@ -25,6 +25,7 @@ export type DiscoveryItem = {
   reason: string;
   next_step: string;
   watch_url: string; // page worth adding to the watch list ("" if none)
+  lane?: string;
 };
 
 export type DiscoveryReport = {
@@ -53,8 +54,9 @@ const PARSE_SCHEMA: Record<string, unknown> = {
           reason: { type: "string" },
           next_step: { type: "string" },
           watch_url: { type: "string" },
+          lane: { type: "string", enum: LANE_KEYS },
         },
-        required: ["funder", "program", "url", "deadline", "amount", "kind", "grade", "reason", "next_step", "watch_url"],
+        required: ["funder", "program", "url", "deadline", "amount", "kind", "grade", "reason", "next_step", "watch_url", "lane"],
         additionalProperties: false,
       },
     },

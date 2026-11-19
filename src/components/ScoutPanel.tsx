@@ -2,7 +2,9 @@
 
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import type { ScoutReport, ScoutHit, WatchSource, ScoutProgress } from "@/lib/scout";
+import type { ScoutReport, ScoutHit, WatchFinding, WatchSource, ScoutProgress } from "@/lib/scout";
+import { LANES, LANE_LABEL } from "@/lib/targeting";
+import { deadlineColor } from "@/lib/stages";
 
 const GRADE_STYLE: Record<string, string> = {
   strong_fit: "bg-green-100 text-green-800",
@@ -61,6 +63,43 @@ function deadlineTime(s: string): number {
 
 type GradeFilter = "all" | "eligible" | "strong";
 type SortBy = "fit" | "deadline" | "new";
+type DueFilter = "any" | "30" | "60" | "90";
+
+// Days until a free-text deadline, or null when unparseable.
+function daysFromText(s: string): number | null {
+  const t = deadlineTime(s);
+  if (t === Number.MAX_SAFE_INTEGER) return null;
+  return Math.ceil((t - Date.now()) / 86400000);
+}
+
+function dueOk(filter: DueFilter, deadlineText: string): boolean {
+  if (filter === "any") return true;
+  const days = daysFromText(deadlineText);
+  return days !== null && days >= 0 && days <= Number(filter);
+}
+
+function laneOk(filter: string, lane?: string): boolean {
+  return filter === "all" || lane === filter;
+}
+
+// One normalized shape for the detail popup, built from either list.
+type Detail = {
+  title: string;
+  sub: string;
+  url: string;
+  number?: string;
+  status?: string;
+  deadlineText: string;
+  days: number | null;
+  grade?: string;
+  reason?: string;
+  lane?: string;
+  keyword?: string;
+  details?: string;
+  isNew: boolean;
+  pipelineHref: string;
+  dismissPayload: { number?: string; source?: string; title: string };
+};
 
 function gradeOk(filter: GradeFilter, grade?: string): boolean {
   if (filter === "all") return true;
@@ -101,7 +140,10 @@ export default function ScoutPanel({
   const [error, setError] = useState("");
   const [gradeFilter, setGradeFilter] = useState<GradeFilter>("eligible");
   const [sortBy, setSortBy] = useState<SortBy>("fit");
+  const [laneFilter, setLaneFilter] = useState("all");
+  const [dueFilter, setDueFilter] = useState<DueFilter>("any");
   const [newOnly, setNewOnly] = useState(false);
+  const [detail, setDetail] = useState<Detail | null>(null);
   const [dismissed, setDismissed] = useState(initialDismissed);
 
   async function dismiss(payload: { number?: string; source?: string; title: string }) {
@@ -254,16 +296,60 @@ export default function ScoutPanel({
   };
 
   const visible: ScoutHit[] = sortHits(
-    (report?.hits ?? []).filter((h) => gradeOk(gradeFilter, h.grade) && (!newOnly || h.isNew)),
+    (report?.hits ?? []).filter(
+      (h) =>
+        gradeOk(gradeFilter, h.grade) &&
+        laneOk(laneFilter, h.lane) &&
+        dueOk(dueFilter, h.closeDate) &&
+        (!newOnly || h.isNew)
+    ),
     (h) => h.closeDate
   );
 
   const visibleFindings = report?.watch
     ? sortHits(
-        report.watch.findings.filter((f) => gradeOk(gradeFilter, f.grade) && (!newOnly || f.isNew)),
+        report.watch.findings.filter(
+          (f) =>
+            gradeOk(gradeFilter, f.grade) &&
+            laneOk(laneFilter, f.lane) &&
+            dueOk(dueFilter, f.deadline) &&
+            (!newOnly || f.isNew)
+        ),
         (f) => f.deadline
       )
     : [];
+
+  const hitDetail = (h: ScoutHit): Detail => ({
+    title: h.title,
+    sub: `${h.agency}`,
+    url: h.url,
+    number: h.number,
+    status: h.status,
+    deadlineText: h.closeDate || "not stated",
+    days: daysFromText(h.closeDate),
+    grade: h.grade,
+    reason: h.reason,
+    lane: h.lane,
+    keyword: h.keyword,
+    isNew: h.isNew,
+    pipelineHref: `/opportunities/new?title=${encodeURIComponent(h.title)}&agency=${encodeURIComponent(h.agency)}&number=${encodeURIComponent(h.number)}&url=${encodeURIComponent(h.url)}&deadline=${encodeURIComponent(toISO(h.closeDate))}`,
+    dismissPayload: { number: h.number, title: h.title },
+  });
+
+  const findingDetail = (f: WatchFinding): Detail => ({
+    title: f.title,
+    sub: f.source,
+    url: f.url || f.source_url,
+    deadlineText: f.deadline || "not stated",
+    days: daysFromText(f.deadline),
+    grade: f.grade,
+    reason: f.reason,
+    lane: f.lane,
+    details: f.details,
+    isNew: f.isNew,
+    pipelineHref: `/opportunities/new?title=${encodeURIComponent(f.title)}&agency=${encodeURIComponent(f.source)}&url=${encodeURIComponent(f.url || f.source_url)}`,
+    dismissPayload: { source: f.source, title: f.title },
+  });
 
   return (
     <div className="space-y-4">
@@ -302,6 +388,32 @@ export default function ScoutPanel({
             <option value="fit">best fit first</option>
             <option value="deadline">deadline (soonest first)</option>
             <option value="new">newest first</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+          Lane
+          <select
+            value={laneFilter}
+            onChange={(e) => setLaneFilter(e.target.value)}
+            className="rounded border border-gray-300 px-1.5 py-1 text-xs bg-white"
+          >
+            <option value="all">all lanes</option>
+            {LANES.map((l) => (
+              <option key={l.key} value={l.key}>{l.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600">
+          Due
+          <select
+            value={dueFilter}
+            onChange={(e) => setDueFilter(e.target.value as DueFilter)}
+            className="rounded border border-gray-300 px-1.5 py-1 text-xs bg-white"
+          >
+            <option value="any">any deadline</option>
+            <option value="30">within 30 days</option>
+            <option value="60">within 60 days</option>
+            <option value="90">within 90 days</option>
           </select>
         </label>
         <label className="flex items-center gap-1.5 text-xs text-gray-600">
@@ -359,35 +471,54 @@ export default function ScoutPanel({
             <p className="p-4 text-sm text-gray-500">Nothing to show{gradeFilter !== "all" ? " (lower grades hidden — switch Show to “all grades”)" : ""}.</p>
           )}
           {visible.map((h) => (
-            <div key={h.number} className="p-3 flex items-center gap-3">
+            <div
+              key={h.number}
+              onClick={() => setDetail(hitDetail(h))}
+              className="p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-50"
+            >
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   {h.isNew && (
                     <span className="shrink-0 rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px] font-bold">NEW</span>
                   )}
-                  <a href={h.url} target="_blank" className="text-sm font-medium hover:underline truncate">
-                    {h.title}
-                  </a>
+                  <span className="text-sm font-medium truncate">{h.title}</span>
                 </div>
-                <div className="text-xs text-gray-500 mt-0.5">
-                  {h.agency} · {h.number} · {h.status}
-                  {h.closeDate ? ` · closes ${h.closeDate}` : ""} · matched “{h.keyword}”
+                <div className="text-xs text-gray-500 mt-0.5 truncate">
+                  {h.agency} · {h.number}
+                  {h.reason ? <span className="italic"> — {h.reason}</span> : null}
                 </div>
-                {h.reason && <div className="text-xs text-gray-600 mt-0.5 italic">{h.reason}</div>}
               </div>
+              {h.lane && h.lane !== "other" && (
+                <span className="shrink-0 hidden md:inline rounded bg-gray-100 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
+                  {LANE_LABEL[h.lane] ?? h.lane}
+                </span>
+              )}
+              <span className="shrink-0 w-28 text-right">
+                {daysFromText(h.closeDate) !== null ? (
+                  <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${deadlineColor(daysFromText(h.closeDate))}`}>
+                    {h.closeDate} · {daysFromText(h.closeDate)}d
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-gray-400">{h.closeDate || "no deadline"}</span>
+                )}
+              </span>
               {h.grade && (
-                <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[h.grade]}`}>
+                <span className={`shrink-0 w-20 text-center rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[h.grade]}`}>
                   {GRADE_LABEL[h.grade]}
                 </span>
               )}
               <Link
-                href={`/opportunities/new?title=${encodeURIComponent(h.title)}&agency=${encodeURIComponent(h.agency)}&number=${encodeURIComponent(h.number)}&url=${encodeURIComponent(h.url)}&deadline=${encodeURIComponent(toISO(h.closeDate))}`}
+                href={hitDetail(h).pipelineHref}
+                onClick={(e) => e.stopPropagation()}
                 className="btn-secondary text-xs shrink-0"
               >
                 + Pipeline
               </Link>
               <button
-                onClick={() => dismiss({ number: h.number, title: h.title })}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dismiss({ number: h.number, title: h.title });
+                }}
                 className="shrink-0 rounded border border-gray-200 px-1.5 py-1 text-xs text-gray-400 hover:text-red-600 hover:border-red-300"
                 title="Dismiss — never show this grant again"
               >
@@ -410,36 +541,54 @@ export default function ScoutPanel({
           {report.watch.findings.length > 0 && (
             <div className="card divide-y">
               {visibleFindings.map((f, i) => (
-                  <div key={f.key || i} className="p-3 flex items-center gap-3">
+                  <div
+                    key={f.key || i}
+                    onClick={() => setDetail(findingDetail(f))}
+                    className="p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-50"
+                  >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         {f.isNew && (
                           <span className="shrink-0 rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px] font-bold">NEW</span>
                         )}
-                        <a href={f.url || f.source_url} target="_blank" className="text-sm font-medium hover:underline truncate">
-                          {f.title}
-                        </a>
+                        <span className="text-sm font-medium truncate">{f.title}</span>
                       </div>
-                      <div className="text-xs text-gray-500 mt-0.5">
+                      <div className="text-xs text-gray-500 mt-0.5 truncate">
                         {f.source}
-                        {f.deadline ? ` · deadline ${f.deadline}` : ""}
+                        {f.reason ? <span className="italic"> — {f.reason}</span> : null}
                       </div>
-                      {f.details && <div className="text-xs text-gray-600 mt-0.5">{f.details}</div>}
-                      {f.reason && <div className="text-xs text-gray-600 mt-0.5 italic">{f.reason}</div>}
                     </div>
+                    {f.lane && f.lane !== "other" && (
+                      <span className="shrink-0 hidden md:inline rounded bg-gray-100 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
+                        {LANE_LABEL[f.lane] ?? f.lane}
+                      </span>
+                    )}
+                    <span className="shrink-0 w-28 text-right">
+                      {daysFromText(f.deadline) !== null ? (
+                        <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${deadlineColor(daysFromText(f.deadline))}`}>
+                          {daysFromText(f.deadline)}d left
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-gray-400 truncate">{f.deadline || "no deadline"}</span>
+                      )}
+                    </span>
                     {f.grade && (
-                      <span className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[f.grade]}`}>
+                      <span className={`shrink-0 w-20 text-center rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[f.grade]}`}>
                         {GRADE_LABEL[f.grade]}
                       </span>
                     )}
                     <Link
-                      href={`/opportunities/new?title=${encodeURIComponent(f.title)}&agency=${encodeURIComponent(f.source)}&url=${encodeURIComponent(f.url || f.source_url)}`}
+                      href={findingDetail(f).pipelineHref}
+                      onClick={(e) => e.stopPropagation()}
                       className="btn-secondary text-xs shrink-0"
                     >
                       + Pipeline
                     </Link>
                     <button
-                      onClick={() => dismiss({ source: f.source, title: f.title })}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        dismiss({ source: f.source, title: f.title });
+                      }}
                       className="shrink-0 rounded border border-gray-200 px-1.5 py-1 text-xs text-gray-400 hover:text-red-600 hover:border-red-300"
                       title="Dismiss — never show this again"
                     >
@@ -575,6 +724,103 @@ export default function ScoutPanel({
           <button className="btn-secondary">Save exclude words</button>
         </form>
       </details>
+
+      {/* Grant detail popup */}
+      {detail && (
+        <div
+          className="no-print fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setDetail(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-6 space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    {detail.isNew && (
+                      <span className="rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px] font-bold">NEW</span>
+                    )}
+                    {detail.grade && (
+                      <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[detail.grade]}`}>
+                        {GRADE_LABEL[detail.grade]}
+                      </span>
+                    )}
+                    {detail.lane && (
+                      <span className="rounded bg-gray-100 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
+                        {LANE_LABEL[detail.lane] ?? detail.lane}
+                      </span>
+                    )}
+                  </div>
+                  <h2 className="text-lg font-bold leading-snug">{detail.title}</h2>
+                  <p className="text-sm text-gray-500">{detail.sub}</p>
+                </div>
+                <button
+                  onClick={() => setDetail(null)}
+                  className="shrink-0 rounded border border-gray-200 px-2 py-1 text-sm text-gray-400 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Deadline</div>
+                  <div>
+                    {detail.deadlineText}
+                    {detail.days !== null && (
+                      <span className={`ml-2 rounded px-2 py-0.5 text-[10px] font-bold ${deadlineColor(detail.days)}`}>
+                        {detail.days < 0 ? "passed" : `${detail.days} days left`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {detail.number && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Opportunity #</div>
+                    <div className="font-mono text-xs">{detail.number}{detail.status ? ` · ${detail.status}` : ""}</div>
+                  </div>
+                )}
+                {detail.keyword && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold">Matched keyword</div>
+                    <div>“{detail.keyword}”</div>
+                  </div>
+                )}
+              </div>
+
+              {detail.details && <p className="text-sm text-gray-700">{detail.details}</p>}
+              {detail.reason && (
+                <div className="rounded bg-gray-50 border border-gray-100 p-3 text-sm">
+                  <div className="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-0.5">Why this grade</div>
+                  {detail.reason}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap pt-1">
+                {detail.url && (
+                  <a href={detail.url} target="_blank" rel="noreferrer" className="btn text-sm">
+                    Open the notice ↗
+                  </a>
+                )}
+                <Link href={detail.pipelineHref} className="btn-secondary text-sm">
+                  + Add to pipeline
+                </Link>
+                <button
+                  onClick={() => {
+                    dismiss(detail.dismissPayload);
+                    setDetail(null);
+                  }}
+                  className="btn-secondary text-sm text-red-600"
+                >
+                  Dismiss forever
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

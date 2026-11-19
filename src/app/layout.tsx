@@ -45,7 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </Link>
             </div>
           </aside>
-          <main className="flex-1 p-6 max-w-6xl">{children}</main>
+          <main className="flex-1 min-w-0 p-6">{children}</main>
         </div>
       </body>
     </html>

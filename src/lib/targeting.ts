@@ -26,6 +26,8 @@ NEVER A FIT (grade not_eligible, or simply do not report): work outside the US o
 
 TRIBAL NUANCE (unchanged): the org is Native-led WITHOUT statutory tribal status. Programs open to "Native nonprofit organizations" (e.g. ACF/ANA) qualify; programs restricted to federally recognized tribes/tribal governments do not.
 
+SERVICE-LANE TAG: every item you report or grade also carries a "lane" field — the single best-fitting service lane: early_learning, primary_care, children_families, playground_outdoor, youth_sports, family_recreation, food_security, general_ops, or other. Use "other" only when nothing fits.
+
 DEADLINES: never report an opportunity whose application window has closed. If a closed program recurs annually and the next cycle is expected within about a year, you may report it with the deadline field set to e.g. "next cycle expected spring 2027" — never put the past date in the deadline field.`;
 
 // Deterministic noise filter for Grants.gov results, applied BEFORE any AI
@@ -71,3 +73,18 @@ export function decodeEntities(s: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+// Service lanes as filterable tags — the graders assign one per item.
+export const LANES = [
+  { key: "early_learning", label: "Early learning / ELC" },
+  { key: "primary_care", label: "Medical / primary care" },
+  { key: "children_families", label: "Children & families" },
+  { key: "playground_outdoor", label: "Playground / outdoor rec" },
+  { key: "youth_sports", label: "Youth sports & facilities" },
+  { key: "family_recreation", label: "Family recreation" },
+  { key: "food_security", label: "Food security" },
+  { key: "general_ops", label: "General operating" },
+  { key: "other", label: "Other" },
+] as const;
+export const LANE_KEYS: string[] = LANES.map((l) => l.key);
+export const LANE_LABEL: Record<string, string> = Object.fromEntries(LANES.map((l) => [l.key, l.label]));
