@@ -17,6 +17,10 @@ export type SearchRow = {
   url: string;
   description: string;
   tracked?: boolean; // funder already in the dashboard's funder list
+  // Filled by the optional AI grading pass:
+  grade?: string;
+  lane?: string;
+  reason?: string;
 };
 
 import { decodeEntities } from "./targeting";
