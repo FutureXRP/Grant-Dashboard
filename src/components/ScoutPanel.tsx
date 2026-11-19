@@ -92,7 +92,7 @@ export default function ScoutPanel({
   const [detail, setDetail] = useState<Detail | null>(null);
   const [dismissed, setDismissed] = useState(initialDismissed);
 
-  async function dismiss(payload: { number?: string; source?: string; title: string }) {
+  async function dismiss(payload: { number?: string; source?: string; title: string; received?: boolean; funder?: string; url?: string }) {
     try {
       const res = await fetch("/api/scout/dismiss", {
         method: "POST",
@@ -691,6 +691,10 @@ export default function ScoutPanel({
         onClose={() => setDetail(null)}
         onDismiss={(d) => {
           dismiss(d.dismissPayload);
+          setDetail(null);
+        }}
+        onReceived={(d) => {
+          dismiss({ ...d.dismissPayload, received: true, funder: d.sub, url: d.url });
           setDetail(null);
         }}
       />

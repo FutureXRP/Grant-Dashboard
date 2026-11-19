@@ -127,12 +127,12 @@ export default function DiscoverPanel({
     }
   }
 
-  async function dismiss(item: { key: string; title: string }) {
+  async function dismiss(item: { key: string; title: string; received?: boolean; funder?: string; url?: string }) {
     setReport((r) => (r ? { ...r, items: r.items.filter((i) => i.key !== item.key) } : r));
     await fetch("/api/scout/dismiss", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: item.key, title: item.title }),
+      body: JSON.stringify(item),
     });
   }
 
@@ -272,6 +272,10 @@ export default function DiscoverPanel({
         onClose={() => setDetail(null)}
         onDismiss={(d) => {
           dismiss({ key: d.dismissPayload.key ?? d.id, title: d.dismissPayload.title });
+          setDetail(null);
+        }}
+        onReceived={(d) => {
+          dismiss({ key: d.dismissPayload.key ?? d.id, title: d.dismissPayload.title, received: true, funder: d.sub, url: d.url });
           setDetail(null);
         }}
         onWatch={(d) => {

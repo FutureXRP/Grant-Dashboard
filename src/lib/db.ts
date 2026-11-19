@@ -600,6 +600,140 @@ async function migrate(b: Backend) {
     ]);
     await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v9_targeting', 'done')`);
   }
+
+  // v10 — connector prospecting sweep (Candid/Kindora/Granted, Nov 2026):
+  // 12 new Tulsa-area funders, watch pages for their grant cycles, and the
+  // deadline-urgent leads as pipeline prospects. Every insert is deduped by
+  // normalized name (or UNIQUE url) so rows created earlier — including by
+  // the CSV importer on production — are never duplicated or overwritten,
+  // and each insert is individually guarded so one bad row can't take the
+  // site down (the v8 lesson).
+  const flag10 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v10_prospects'`);
+  if (!flag10) {
+    const nameKey = (s: string) => s.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "");
+    const funderKeys = new Set((await b.all<{ name: string }>(`SELECT name FROM funders`)).map((f) => nameKey(f.name)));
+    const newFunders: [string, number, string, string, string, string, string][] = [
+      // name, tier, focus, award_range, projects, website, notes
+      ["William K. Warren Foundation", 1,
+        "Health care, health education, mental health, community wellness — Tulsa / NE Oklahoma",
+        "Varies", "Medical center services, health education, family wellness",
+        "https://www.williamkwarrenfoundation.org/grant-request",
+        "Rolling; applications by MAIL only (no email/online). Major Tulsa health funder. Found via connector sweep Nov 2026."],
+      ["Coretz Family Foundation", 1,
+        "Food insecurity, health, economic mobility, education — Tulsa",
+        "Varies", "Food distribution, medical access, family programs",
+        "https://coretzfamilyfoundation.org/applications/",
+        "Quarterly board deadlines (2026 cycle: Feb 27 / May 22 / Aug 21 / Oct 23) — verify next deadline on site."],
+      ["Ruth Nelson Family Foundation", 1,
+        "Youth development, general operating, capital, capacity building — Tulsa County",
+        "Varies", "Youth sports development, general operations",
+        "https://rnfftulsa.org/apply/process/",
+        "Rolling LOI via grantinterface portal; prefers City of Tulsa, serves Tulsa County."],
+      ["Oklahoma Partnership for School Readiness Foundation", 1,
+        "School readiness, early childhood systems — Oklahoma statewide",
+        "$400 – varies", "Early learning center programs, classroom materials",
+        "https://opsr.submittable.com/submit",
+        "Rolling 'Clearinghouse' implementation funding + annual Kathy Cronemiller classroom grants ($400–800, due Aug)."],
+      ["Kaleidoscope Foundation", 1,
+        "Crisis/respite child care, food provision, youth life skills — names Greater Tulsa",
+        "Varies", "Child care, food distribution, youth development",
+        "https://kaleidoscope-foundation.org/applications/",
+        "Michigan-based but grant program explicitly serves Greater Tulsa. Application by mail; listed deadline Aug 15, 2027."],
+      ["David E. & Cassie L. Temple Foundation", 1,
+        "General grantmaking — Tulsa / Oklahoma",
+        "Varies", "General operations",
+        "https://templeok.org/grant-information/",
+        "Board reviews proposals at year-end; current cycle closes Dec 31, 2026."],
+      ["All Kids Play", 1,
+        "Youth sports: registration, equipment, facility improvements — national",
+        "Varies", "Sports facilities, youth sports programs",
+        "https://allkidsplay.org/youth-sports-grants/",
+        "Nationwide exact-fit for the youth-sports lane; rolling."],
+      ["Chapman Trusts (J.A. & Leta M / Leta McFarlin Memorial)", 2,
+        "Major Tulsa charitable trusts related to Mary K. Chapman Foundation (~$72M/yr combined giving)",
+        "Varies", "",
+        "https://chapmantrusts.org",
+        "Relationship/990 research; the open H.A. & Mary K. Chapman application cycle (grantinterface) closes Mar 1, 2027."],
+      ["William S. Smith Charitable Trust", 2,
+        "Tulsa — roughly $7.9M/yr in grants",
+        "Varies", "", "",
+        "No website; 990-driven outreach. Found via connector sweep Nov 2026."],
+      ["Sanford P. & Irene F. Burnstein Foundation", 2,
+        "Tulsa family foundation (~$12M/yr giving)",
+        "Varies", "",
+        "https://burnsteinfoundation.com/",
+        "Focus areas unverified — check 990s before approach."],
+      ["Gelvin Foundation", 2,
+        "Equipment & special program needs within 30 miles of Tulsa or Eufaula",
+        "Up to $3,000", "Equipment, small capital items",
+        "https://www.gelvinfoundation.org/grant",
+        "Quarterly: proposals due Feb/May/Aug/Oct 10. Small but easy repeat wins."],
+      ["Explorer Pipeline Partner Agency Program (via TCF)", 2,
+        "Tulsa / Rogers / Wagoner counties — multi-year partner support + volunteers",
+        "Varies", "",
+        "https://tulsacf.org/explorer-pipeline-partner-agency-application/",
+        "Annual cycle; last closed Aug 31 — watch for the next one."],
+    ];
+    for (const [name, tier, focus, award, projects, website, notes] of newFunders) {
+      try {
+        if (!funderKeys.has(nameKey(name))) {
+          await b.run(
+            `INSERT INTO funders (name, type, tier, focus, award_range, projects, website, notes) VALUES (?, 'foundation', ?, ?, ?, ?, ?, ?)`,
+            [name, tier, focus, award, projects, website, notes]
+          );
+        }
+      } catch { /* one bad row never blocks startup */ }
+    }
+
+    const newWatch: [string, string][] = [
+      ["William K. Warren Foundation — grant request", "https://www.williamkwarrenfoundation.org/grant-request"],
+      ["Coretz Family Foundation — applications", "https://coretzfamilyfoundation.org/applications/"],
+      ["Ruth Nelson Family Foundation — apply", "https://rnfftulsa.org/apply/process/"],
+      ["OPSR — school readiness funding", "https://opsr.submittable.com/submit"],
+      ["Temple Foundation — grant information", "https://templeok.org/grant-information/"],
+      ["Kaleidoscope Foundation — applications", "https://kaleidoscope-foundation.org/applications/"],
+      ["All Kids Play — youth sports grants", "https://allkidsplay.org/youth-sports-grants/"],
+      ["Explorer Pipeline (TCF) — partner agency", "https://tulsacf.org/explorer-pipeline-partner-agency-application/"],
+      ["Chapman Trusts — foundation portal", "https://chapmantrusts.org"],
+      ["GKFF — Accelerator Grants", "https://www.gkff.org/accelerator-grants"],
+    ];
+    for (const [name, url] of newWatch) {
+      try {
+        await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, 'foundation')`, [name, url]);
+      } catch { /* ignore */ }
+    }
+
+    const oppKeys = new Set((await b.all<{ name: string }>(`SELECT name FROM opportunities`)).map((o) => nameKey(o.name)));
+    const newOpps: [string, string, string, string, string, string, string][] = [
+      // name, funder_name, stage, outcome, deadline (YYYY-MM-DD or ''), url, notes
+      ["OCCF Access to Health Care Grant", "Oklahoma City Community Foundation", "prospect", "", "2026-12-10",
+        "https://occf.org/communitygrants/health/",
+        "Up to $30,000 for expanding health care access for underserved Oklahomans. VERIFY Tulsa-area orgs qualify — OCCF leans central Oklahoma. Found via connector sweep."],
+      ["LWCF Outdoor Recreation Grant (Oklahoma)", "Oklahoma Tourism & Recreation Department", "prospect", "", "2026-12-15",
+        "https://otrd.travelok.com/land-and-water-conservation-fund",
+        "50/50 matching grant for playground / sports-field / outdoor recreation development. Typically local governments + eligible entities — verify nonprofit eligibility or partner with Tulsa County."],
+      ["Temple Foundation Year-End Grant", "David E. & Cassie L. Temple Foundation", "prospect", "", "2026-12-31",
+        "https://templeok.org/grant-proposal-summary",
+        "General grantmaking, Tulsa/OK; board reviews proposals at year-end."],
+      ["GKFF Accelerator Grant", "George Kaiser Family Foundation", "awarded", "awarded", "",
+        "https://www.gkffai.org/accelerator",
+        "ALREADY RECEIVED — recorded as awarded. [VERIFY: award amount — enter it on the opportunity so the dashboard totals are right.]"],
+      ["Chapman Foundation General Grant", "H.A. & Mary K. Chapman Foundation", "prospect", "", "2027-03-01",
+        "https://www.grantinterface.com/Home/Logon?urlkey=chapmanfoundation",
+        "$1K–$10M range; general operations, capital, early childhood, healthcare, parks, feeding programs."],
+    ];
+    for (const [name, funder, stage, outcome, deadline, url, notes] of newOpps) {
+      try {
+        if (!oppKeys.has(nameKey(name))) {
+          await b.run(
+            `INSERT INTO opportunities (name, funder_name, type, stage, outcome, deadline, url, notes) VALUES (?, ?, 'foundation', ?, ?, ?, ?, ?)`,
+            [name, funder, stage, outcome, deadline, url, notes]
+          );
+        }
+      } catch { /* ignore */ }
+    }
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v10_prospects', 'done')`);
+  }
 }
 
 async function addKeywords(b: Backend, keywords: string[]) {

@@ -81,12 +81,14 @@ export function DetailPanel({
   onDismiss,
   onWatch,
   watched,
+  onReceived,
 }: {
   detail: Detail | null;
   onClose: () => void;
   onDismiss: (d: Detail) => void;
   onWatch?: (d: Detail) => void;
   watched?: boolean;
+  onReceived?: (d: Detail) => void;
 }) {
   if (!detail) return null;
   return (
@@ -178,6 +180,15 @@ export function DetailPanel({
           {detail.watchUrl && onWatch && (
             <button onClick={() => onWatch(detail)} disabled={watched} className="btn-secondary text-sm disabled:text-emerald-700">
               {watched ? "✓ watching" : "+ Watch this page"}
+            </button>
+          )}
+          {onReceived && (
+            <button
+              onClick={() => onReceived(detail)}
+              className="btn-secondary text-sm text-emerald-700"
+              title="We already received this grant — record it as awarded and stop showing it"
+            >
+              ✓ Already received
             </button>
           )}
           <button
