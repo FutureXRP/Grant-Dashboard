@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runDiscovery, latestDiscovery, getDiscoveryProgress } from "@/lib/discover";
+import { discoveryStep, latestDiscovery, getDiscoveryProgress } from "@/lib/discover";
 import { addSource } from "@/lib/scout";
 import { aiConfigured } from "@/lib/ai";
 
@@ -11,7 +11,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { action?: string; name?: string; url?: string; kind?: string };
+  let body: { action?: string; reset?: boolean; name?: string; url?: string; kind?: string };
   try {
     body = await req.json();
   } catch {
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     await addSource(name, url, String(body.kind || "foundation"));
     return NextResponse.json({ ok: true, watched: url });
   }
-  if (body.action === "run") {
+  if (body.action === "step" || body.action === "run") {
     if (!aiConfigured()) {
       return NextResponse.json(
         { error: "ANTHROPIC_API_KEY is not set. Add it to the environment to enable discovery." },
@@ -34,12 +34,13 @@ export async function POST(req: NextRequest) {
       );
     }
     try {
-      const report = await runDiscovery();
-      return NextResponse.json({ report });
+      // 'run' (older clients) behaves like a fresh first step.
+      const result = await discoveryStep(body.action === "run" ? true : Boolean(body.reset));
+      return NextResponse.json(result);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Discovery run failed";
+      const message = err instanceof Error ? err.message : "Discovery step failed";
       return NextResponse.json({ error: message }, { status: 500 });
     }
   }
-  return NextResponse.json({ error: "action must be 'run' or 'watch'" }, { status: 400 });
+  return NextResponse.json({ error: "action must be 'step' or 'watch'" }, { status: 400 });
 }

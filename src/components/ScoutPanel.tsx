@@ -275,7 +275,7 @@ export default function ScoutPanel({
           {running ? "Scouting…" : "Run scout now"}
         </button>
         {!running && report && (
-          <span className="text-xs text-gray-500">
+          <span className="text-xs text-gray-500" suppressHydrationWarning>
             Last run {new Date(report.ranAt).toLocaleString()} — {report.totalFound} open opportunities,{" "}
             {report.newCount} new since last sweep
           </span>

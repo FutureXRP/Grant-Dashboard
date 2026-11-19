@@ -102,18 +102,56 @@ export async function getDiscoveryProgress(): Promise<DiscoveryProgress | null> 
   }
 }
 
-export async function runDiscovery(): Promise<DiscoveryReport> {
-  if (!aiConfigured()) throw new Error("ANTHROPIC_API_KEY is not set.");
-  const startedAt = new Date().toISOString();
-  const tick = (label: string) => writeDiscoveryProgress({ active: true, label, startedAt });
+// ---- Stepwise research: one bounded model call per HTTP request ----
+//
+// A full research run (several web-search rounds + parsing) regularly exceeds
+// Vercel's 300-second function cap, which killed runs mid-flight. So the run
+// is split into STEPS: each HTTP request makes exactly one model call (capped
+// searches), persists the conversation state, and returns; the browser calls
+// step after step until the model finishes, then the final step parses and
+// stores the report. Each step finishes comfortably inside the cap.
+
+type DiscoveryState = {
+  startedAt: string;
+  round: number;
+  searchesUsed: number;
+  researchText: string;
+  messages: Anthropic.Beta.BetaMessageParam[];
+};
+
+const MAX_ROUNDS = 4;
+
+async function loadState(): Promise<DiscoveryState | null> {
+  const row = await q.get<{ value: string }>(`SELECT value FROM settings WHERE key='discovery_state'`);
+  if (!row?.value) return null;
   try {
+    const st = JSON.parse(row.value) as DiscoveryState;
+    // Abandoned runs go stale; start fresh after 15 minutes.
+    if (Date.now() - new Date(st.startedAt).getTime() > 15 * 60 * 1000) return null;
+    return st;
+  } catch {
+    return null;
+  }
+}
+
+async function saveState(st: DiscoveryState | null): Promise<void> {
+  if (st === null) {
+    await q.run(`DELETE FROM settings WHERE key='discovery_state'`);
+    return;
+  }
+  await q.run(
+    `INSERT INTO settings (key, value) VALUES ('discovery_state', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+    [JSON.stringify(st)]
+  );
+}
+
+async function initState(): Promise<DiscoveryState> {
   const profile = (await q.get<{
     name: string; legal_status: string; mission: string; programs: string;
     service_area: string; populations: string;
   }>(`SELECT * FROM org_profile WHERE id=1`))!;
   const knownFunders = await q.all<{ name: string }>(`SELECT name FROM funders ORDER BY name`);
   const watched = await q.all<{ name: string }>(`SELECT name FROM scout_sources ORDER BY name`);
-
   const brief = `# Organization
 ${profile.name} (${profile.legal_status})
 Mission: ${profile.mission}
@@ -128,65 +166,88 @@ ${knownFunders.map((f) => f.name).join("; ")}
 ${watched.map((s) => s.name).join("; ")}
 
 Research grant opportunities this organization is likely missing. Today's date: ${new Date().toDateString()}.`;
+  return {
+    startedAt: new Date().toISOString(),
+    round: 0,
+    searchesUsed: 0,
+    researchText: "",
+    messages: [{ role: "user", content: brief }],
+  };
+}
 
-  const client = new Anthropic();
+export type DiscoveryStepResult =
+  | { done: false; round: number; searchesUsed: number }
+  | { done: true; report: DiscoveryReport };
 
-  // Step 1 — research with live web search. Server tools may pause the turn;
-  // continue until the model finishes (bounded).
-  let messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: brief }];
-  let searchesUsed = 0;
-  let researchText = "";
-  for (let i = 0; i < 3; i++) {
-    await tick(i === 0 ? "Searching the web for funders…" : `Continuing research (round ${i + 1})…`);
+export async function discoveryStep(reset: boolean): Promise<DiscoveryStepResult> {
+  if (!aiConfigured()) throw new Error("ANTHROPIC_API_KEY is not set.");
+  let state = reset ? null : await loadState();
+  if (!state) state = await initState();
+  const tick = (label: string) =>
+    writeDiscoveryProgress({ active: true, label, startedAt: state!.startedAt });
+
+  try {
+    state.round += 1;
+    await tick(
+      state.round === 1
+        ? "Searching the web for funders…"
+        : `Research round ${state.round} (${state.searchesUsed} searches so far)…`
+    );
+    const client = new Anthropic();
     const response = await client.beta.messages.create({
       model: MODEL,
-      max_tokens: 16000,
+      max_tokens: 8000,
       system: [{ type: "text", text: RESEARCH_SYSTEM, cache_control: { type: "ephemeral" } }],
-      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 10 }],
-      messages,
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 5 }],
+      messages: state.messages,
     });
-    searchesUsed += response.usage.server_tool_use?.web_search_requests ?? 0;
-    researchText += response.content
+    state.searchesUsed += response.usage.server_tool_use?.web_search_requests ?? 0;
+    state.researchText += response.content
       .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text")
       .map((b) => b.text)
       .join("\n");
-    if (response.stop_reason !== "pause_turn") break;
-    messages = [...messages, { role: "assistant", content: response.content }];
-  }
-  if (!researchText.trim()) throw new Error("Research step returned no text.");
 
-  // Step 2 — parse the research into structured findings (no tools, so the
-  // JSON-schema output constraint applies cleanly).
-  await tick("Organizing and grading the findings…");
-  const parseResponse = await client.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
-    system:
-      "Convert the researcher's notes into structured data, faithfully. Keep only findings with a named funder and program. Use \"not stated\" for missing deadlines/amounts — never fill gaps with guesses. watch_url is the funder page that announces opportunities, or \"\".",
-    output_config: { format: { type: "json_schema", schema: PARSE_SCHEMA } },
-    messages: [{ role: "user", content: researchText }],
-  });
-  const text = parseResponse.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
-  if (!text) throw new Error("Parse step returned no text.");
-  const parsed = JSON.parse(text) as { summary: string; items: Omit<DiscoveryItem, "key">[] };
+    if (response.stop_reason === "pause_turn" && state.round < MAX_ROUNDS) {
+      state.messages = [...state.messages, { role: "assistant", content: response.content }];
+      await saveState(state);
+      await tick(`Research round ${state.round} done — continuing…`);
+      return { done: false, round: state.round, searchesUsed: state.searchesUsed };
+    }
 
-  const report: DiscoveryReport = {
-    ranAt: new Date().toISOString(),
-    summary: parsed.summary,
-    searchesUsed,
-    items: parsed.items.map((item) => ({
-      ...item,
-      key: "discover:" + hashText(`${item.funder}|${item.program}`.toLowerCase()),
-    })),
-  };
-  await q.run(
-    `INSERT INTO settings (key, value) VALUES ('discovery_report', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
-    [JSON.stringify(report)]
-  );
-  return report;
+    // Final step: parse the accumulated notes into structured findings.
+    if (!state.researchText.trim()) throw new Error("Research returned no text.");
+    await tick("Organizing and grading the findings…");
+    const parseResponse = await client.messages.create({
+      model: MODEL,
+      max_tokens: 8000,
+      system:
+        "Convert the researcher's notes into structured data, faithfully. Keep only findings with a named funder and program. Use \"not stated\" for missing deadlines/amounts — never fill gaps with guesses. If a note says a cycle is closed but recurs, the deadline field carries the NEXT-cycle expectation text, never a past date. watch_url is the funder page that announces opportunities, or \"\".",
+      output_config: { format: { type: "json_schema", schema: PARSE_SCHEMA } },
+      messages: [{ role: "user", content: state.researchText }],
+    });
+    const text = parseResponse.content.find((b): b is Anthropic.TextBlock => b.type === "text")?.text;
+    if (!text) throw new Error("Parse step returned no text.");
+    const parsed = JSON.parse(text) as { summary: string; items: Omit<DiscoveryItem, "key">[] };
 
-  } finally {
-    await writeDiscoveryProgress({ active: false, label: "done", startedAt });
+    const report: DiscoveryReport = {
+      ranAt: new Date().toISOString(),
+      summary: parsed.summary,
+      searchesUsed: state.searchesUsed,
+      items: parsed.items.map((item) => ({
+        ...item,
+        key: "discover:" + hashText(`${item.funder}|${item.program}`.toLowerCase()),
+      })),
+    };
+    await q.run(
+      `INSERT INTO settings (key, value) VALUES ('discovery_report', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+      [JSON.stringify(report)]
+    );
+    await saveState(null);
+    await writeDiscoveryProgress({ active: false, label: "done", startedAt: state.startedAt });
+    return { done: true, report };
+  } catch (e) {
+    await writeDiscoveryProgress({ active: false, label: "failed", startedAt: state.startedAt });
+    throw e;
   }
 }
 

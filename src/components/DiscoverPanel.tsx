@@ -84,25 +84,40 @@ export default function DiscoverPanel({
       }
     }, 2500);
 
-    // Kick off the run; if the response survives the gateway, use it as a
-    // fast path. If not, the poll loop above finishes the job.
+    // Drive the run as a series of SHORT server steps (one bounded model call
+    // each) — a single long request used to outlive Vercel's function cap and
+    // die mid-research. The poll loop above stays as a safety net if a step's
+    // response is lost.
     try {
-      const res = await fetch("/api/scout/discover", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "run" }),
-      });
-      const text = await res.text();
-      let data: { report?: DiscoveryReport; error?: string } = {};
-      try {
-        data = JSON.parse(text);
-      } catch {
-        /* gateway error page, not JSON — poll loop takes over */
+      let reset = true;
+      for (let i = 0; i < 8 && !finished; i++) {
+        const res = await fetch("/api/scout/discover", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "step", reset }),
+        });
+        reset = false;
+        const text = await res.text();
+        let data: { done?: boolean; round?: number; searchesUsed?: number; report?: DiscoveryReport; error?: string } = {};
+        try {
+          data = JSON.parse(text);
+        } catch {
+          /* gateway page, not JSON — let the poll loop decide */
+          return;
+        }
+        if (!res.ok) {
+          finish(null, data.error || "Discovery step failed");
+          return;
+        }
+        if (data.done && data.report) {
+          finish(data.report);
+          return;
+        }
+        setProgressLabel(`Research round ${data.round ?? i + 1} done (${data.searchesUsed ?? "…"} searches) — continuing…`);
       }
-      if (res.ok && data.report) finish(data.report);
-      else if (!res.ok && data.error) finish(null, data.error);
+      if (!finished) finish(null, "Research did not converge — run the sweep again.");
     } catch {
-      /* connection cut mid-run — poll loop takes over */
+      /* connection cut mid-step — poll loop takes over */
     }
   }
 
@@ -148,7 +163,7 @@ export default function DiscoverPanel({
       )}
       {report && (
         <>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-400" suppressHydrationWarning>
             Last sweep {new Date(report.ranAt).toLocaleString()} · {report.searchesUsed} web searches ·{" "}
             {report.items.length} leads
           </p>
