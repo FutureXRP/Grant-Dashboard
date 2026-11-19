@@ -84,6 +84,7 @@ function laneOk(filter: string, lane?: string): boolean {
 
 // One normalized shape for the detail popup, built from either list.
 type Detail = {
+  id: string;
   title: string;
   sub: string;
   url: string;
@@ -320,6 +321,7 @@ export default function ScoutPanel({
     : [];
 
   const hitDetail = (h: ScoutHit): Detail => ({
+    id: h.number,
     title: h.title,
     sub: `${h.agency}`,
     url: h.url,
@@ -337,6 +339,7 @@ export default function ScoutPanel({
   });
 
   const findingDetail = (f: WatchFinding): Detail => ({
+    id: f.key || f.title,
     title: f.title,
     sub: f.source,
     url: f.url || f.source_url,
@@ -352,7 +355,7 @@ export default function ScoutPanel({
   });
 
   return (
-    <div className="space-y-4">
+    <div className={"space-y-4 transition-[margin] " + (detail ? "lg:mr-[460px]" : "")}>
       <div className="flex items-center gap-3 flex-wrap">
         <button className="btn" onClick={run} disabled={running}>
           {running && (
@@ -467,6 +470,13 @@ export default function ScoutPanel({
 
       {report && (
         <div className="card divide-y">
+          <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_9rem_8rem_5.5rem_8rem] gap-3 items-center px-3 py-2 bg-gray-50 border-b border-gray-200 rounded-t-xl text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+            <span>Grant</span>
+            <span>Lane</span>
+            <span className="text-right">Deadline</span>
+            <span className="text-center">Fit</span>
+            <span />
+          </div>
           {visible.length === 0 && (
             <p className="p-4 text-sm text-gray-500">Nothing to show{gradeFilter !== "all" ? " (lower grades hidden — switch Show to “all grades”)" : ""}.</p>
           )}
@@ -474,9 +484,9 @@ export default function ScoutPanel({
             <div
               key={h.number}
               onClick={() => setDetail(hitDetail(h))}
-              className="p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-50"
+              className={"grid grid-cols-[minmax(0,1fr)_9rem_8rem_5.5rem_8rem] gap-3 items-center px-3 py-2.5 cursor-pointer hover:bg-gray-50 " + (detail?.id === h.number ? "bg-emerald-50" : "")}
             >
-              <div className="flex-1 min-w-0">
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   {h.isNew && (
                     <span className="shrink-0 rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px] font-bold">NEW</span>
@@ -488,12 +498,14 @@ export default function ScoutPanel({
                   {h.reason ? <span className="italic"> — {h.reason}</span> : null}
                 </div>
               </div>
-              {h.lane && h.lane !== "other" && (
-                <span className="shrink-0 hidden md:inline rounded bg-gray-100 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
-                  {LANE_LABEL[h.lane] ?? h.lane}
-                </span>
-              )}
-              <span className="shrink-0 w-28 text-right">
+              <span className="min-w-0">
+                {h.lane && h.lane !== "other" && (
+                  <span className="inline-block max-w-full truncate rounded bg-gray-100 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
+                    {LANE_LABEL[h.lane] ?? h.lane}
+                  </span>
+                )}
+              </span>
+              <span className="text-right">
                 {daysFromText(h.closeDate) !== null ? (
                   <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${deadlineColor(daysFromText(h.closeDate))}`}>
                     {h.closeDate} · {daysFromText(h.closeDate)}d
@@ -502,28 +514,25 @@ export default function ScoutPanel({
                   <span className="text-[10px] text-gray-400">{h.closeDate || "no deadline"}</span>
                 )}
               </span>
-              {h.grade && (
-                <span className={`shrink-0 w-20 text-center rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[h.grade]}`}>
-                  {GRADE_LABEL[h.grade]}
-                </span>
-              )}
-              <Link
-                href={hitDetail(h).pipelineHref}
-                onClick={(e) => e.stopPropagation()}
-                className="btn-secondary text-xs shrink-0"
-              >
-                + Pipeline
-              </Link>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  dismiss({ number: h.number, title: h.title });
-                }}
-                className="shrink-0 rounded border border-gray-200 px-1.5 py-1 text-xs text-gray-400 hover:text-red-600 hover:border-red-300"
-                title="Dismiss — never show this grant again"
-              >
-                ✕
-              </button>
+              <span className="text-center">
+                {h.grade && (
+                  <span className={`inline-block rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[h.grade]}`}>
+                    {GRADE_LABEL[h.grade]}
+                  </span>
+                )}
+              </span>
+              <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                <Link href={hitDetail(h).pipelineHref} className="btn-secondary text-xs shrink-0">
+                  + Pipeline
+                </Link>
+                <button
+                  onClick={() => dismiss({ number: h.number, title: h.title })}
+                  className="shrink-0 rounded border border-gray-200 px-1.5 py-1 text-xs text-gray-400 hover:text-red-600 hover:border-red-300"
+                  title="Dismiss — never show this grant again"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -540,13 +549,20 @@ export default function ScoutPanel({
           )}
           {report.watch.findings.length > 0 && (
             <div className="card divide-y">
+              <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_9rem_8rem_5.5rem_8rem] gap-3 items-center px-3 py-2 bg-gray-50 border-b border-gray-200 rounded-t-xl text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                <span>Opportunity</span>
+                <span>Lane</span>
+                <span className="text-right">Deadline</span>
+                <span className="text-center">Fit</span>
+                <span />
+              </div>
               {visibleFindings.map((f, i) => (
                   <div
                     key={f.key || i}
                     onClick={() => setDetail(findingDetail(f))}
-                    className="p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-50"
+                    className={"grid grid-cols-[minmax(0,1fr)_9rem_8rem_5.5rem_8rem] gap-3 items-center px-3 py-2.5 cursor-pointer hover:bg-gray-50 " + (detail?.id === (f.key || f.title) ? "bg-emerald-50" : "")}
                   >
-                    <div className="flex-1 min-w-0">
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         {f.isNew && (
                           <span className="shrink-0 rounded bg-emerald-600 text-white px-1.5 py-0.5 text-[10px] font-bold">NEW</span>
@@ -558,42 +574,41 @@ export default function ScoutPanel({
                         {f.reason ? <span className="italic"> — {f.reason}</span> : null}
                       </div>
                     </div>
-                    {f.lane && f.lane !== "other" && (
-                      <span className="shrink-0 hidden md:inline rounded bg-gray-100 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
-                        {LANE_LABEL[f.lane] ?? f.lane}
-                      </span>
-                    )}
-                    <span className="shrink-0 w-28 text-right">
+                    <span className="min-w-0">
+                      {f.lane && f.lane !== "other" && (
+                        <span className="inline-block max-w-full truncate rounded bg-gray-100 text-gray-600 px-2 py-0.5 text-[10px] font-semibold">
+                          {LANE_LABEL[f.lane] ?? f.lane}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-right">
                       {daysFromText(f.deadline) !== null ? (
                         <span className={`rounded px-2 py-0.5 text-[10px] font-bold ${deadlineColor(daysFromText(f.deadline))}`}>
                           {daysFromText(f.deadline)}d left
                         </span>
                       ) : (
-                        <span className="text-[10px] text-gray-400 truncate">{f.deadline || "no deadline"}</span>
+                        <span className="inline-block max-w-full truncate text-[10px] text-gray-400">{f.deadline || "no deadline"}</span>
                       )}
                     </span>
-                    {f.grade && (
-                      <span className={`shrink-0 w-20 text-center rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[f.grade]}`}>
-                        {GRADE_LABEL[f.grade]}
-                      </span>
-                    )}
-                    <Link
-                      href={findingDetail(f).pipelineHref}
-                      onClick={(e) => e.stopPropagation()}
-                      className="btn-secondary text-xs shrink-0"
-                    >
-                      + Pipeline
-                    </Link>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        dismiss({ source: f.source, title: f.title });
-                      }}
-                      className="shrink-0 rounded border border-gray-200 px-1.5 py-1 text-xs text-gray-400 hover:text-red-600 hover:border-red-300"
-                      title="Dismiss — never show this again"
-                    >
-                      ✕
-                    </button>
+                    <span className="text-center">
+                      {f.grade && (
+                        <span className={`inline-block rounded px-2 py-0.5 text-[10px] font-bold ${GRADE_STYLE[f.grade]}`}>
+                          {GRADE_LABEL[f.grade]}
+                        </span>
+                      )}
+                    </span>
+                    <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                      <Link href={findingDetail(f).pipelineHref} className="btn-secondary text-xs shrink-0">
+                        + Pipeline
+                      </Link>
+                      <button
+                        onClick={() => dismiss({ source: f.source, title: f.title })}
+                        className="shrink-0 rounded border border-gray-200 px-1.5 py-1 text-xs text-gray-400 hover:text-red-600 hover:border-red-300"
+                        title="Dismiss — never show this again"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
                 ))}
             </div>
@@ -725,16 +740,9 @@ export default function ScoutPanel({
         </form>
       </details>
 
-      {/* Grant detail popup */}
+      {/* Grant detail panel — docked to the right edge, Instrumentl-style */}
       {detail && (
-        <div
-          className="no-print fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
-          onClick={() => setDetail(null)}
-        >
-          <div
-            className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <aside className="no-print fixed inset-y-0 right-0 z-50 w-full sm:w-[460px] bg-white border-l border-gray-200 shadow-2xl overflow-y-auto">
             <div className="p-6 space-y-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -818,8 +826,7 @@ export default function ScoutPanel({
                 </button>
               </div>
             </div>
-          </div>
-        </div>
+        </aside>
       )}
     </div>
   );
