@@ -17,7 +17,7 @@ type ProfileRow = {
   leadership: string; stats: string;
 };
 
-async function orgContext(): Promise<string> {
+export async function orgContext(): Promise<string> {
   const p = (await q.get<ProfileRow>(`SELECT * FROM org_profile WHERE id=1`))!;
   const narratives = await q.all<{ category: string; title: string; content: string }>(
     `SELECT category, title, content FROM narratives ORDER BY category`

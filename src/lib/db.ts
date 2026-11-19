@@ -264,6 +264,15 @@ async function migrate(b: Backend) {
     last_hash TEXT DEFAULT '',
     last_checked TEXT DEFAULT ''
   );
+  CREATE TABLE IF NOT EXISTS application_forms (
+    opportunity_id INTEGER PRIMARY KEY,
+    url TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    fields TEXT DEFAULT '[]',
+    answers TEXT DEFAULT '{}',
+    fetched_at TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
   `);
 
   // Column migrations for databases created before these columns existed.
