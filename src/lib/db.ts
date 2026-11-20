@@ -895,6 +895,41 @@ async function migrate(b: Backend) {
     }
     await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v11_candid_library', 'done')`);
   }
+
+  // v12 — officer/trustee names from the Candid 990 exports, for the small
+  // family foundations that publish no email: the person a mailed LOI is
+  // addressed to. Fill-only; a contact the team already entered is kept.
+  // Names come from each foundation's latest 990 filing and can be stale.
+  const flag12 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v12_officers'`);
+  if (!flag12) {
+    const officers: [string, string][] = [
+      ["Sharna & Irvin Frank Foundation", "David Finer (officer, per 990)"],
+      ["Stuart Family Foundation (Tulsa)", "John B. Turner (trustee, per 990)"],
+      ["Robert S. & Helen Grey Trippet Foundation", "Barbara R. Kelley (officer, per 990)"],
+      ["Wegener Foundation", "Jeff Wegener (per 990)"],
+      ["Charles & Peggy Stephenson Family Foundation", "Charles C. Stephenson Jr. (per 990)"],
+      ["J & S Boyce Family Foundation", "John Charles Boyce (per 990)"],
+      ["Mike & Susan Burkhart Foundation", "Bryan Burkhart (per 990)"],
+      ["Clyde & Anita Becker Foundation", "Anita O. Becker (per 990)"],
+      ["Fulton & Susie Collins Foundation", "Catherine E. Collins (per 990)"],
+      ["Jess L. & Miriam B. Stevens Foundation", "Joseph J. McCain Jr. (officer, per 990)"],
+      ["Joseph & Virginia Dibert Foundation Trust", "Leslie Pierce (trustee, per 990)"],
+      ["SendMe Foundation", "Marie E. Rokisky (per 990)"],
+      ["Harold A. & Edna L. White Foundation", "Administered by BOKF, N.A. (Bank of Oklahoma trust dept.)"],
+      ["Sanford P. & Irene F. Burnstein Foundation", "Irene F. Burnstein (co-trustee, per 990)"],
+      ["David E. & Cassie L. Temple Foundation", "David Beiler (per 990)"],
+      ["Coretz Family Foundation", "Adam M. Coretz (per 990)"],
+    ];
+    for (const [fname, cname] of officers) {
+      try {
+        await b.run(
+          `UPDATE funders SET contact_name = CASE WHEN contact_name IS NULL OR contact_name='' THEN ? ELSE contact_name END WHERE name = ?`,
+          [cname, fname]
+        );
+      } catch { /* ignore */ }
+    }
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v12_officers', 'done')`);
+  }
 }
 
 async function addKeywords(b: Backend, keywords: string[]) {
