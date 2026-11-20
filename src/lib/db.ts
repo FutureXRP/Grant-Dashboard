@@ -734,6 +734,167 @@ async function migrate(b: Backend) {
     }
     await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v10_prospects', 'done')`);
   }
+
+  // v11 — Candid library exports + peer-funder analysis (Nov 2026): funders
+  // proven by 990 grants to SquareOne's closest Tulsa peers (Crossover
+  // Community Impact, Crosstown Learning Center, Neighbors Along the Line,
+  // Tulsa Educare), plus Tulsa grantmakers from the Foundation Directory
+  // early-learning/health exports. Name-deduped inserts; contact emails are
+  // only filled on existing rows that have none.
+  const flag11 = await b.get<{ value: string }>(`SELECT value FROM settings WHERE key='seed_v11_candid_library'`);
+  if (!flag11) {
+    const nameKey = (s: string) => s.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "");
+    const funderKeys = new Set((await b.all<{ name: string }>(`SELECT name FROM funders`)).map((f) => nameKey(f.name)));
+    // name, tier, focus, award_range, website, notes, contact_name, contact_email
+    const newFunders: [string, number, string, string, string, string, string, string][] = [
+      ["Ascension St. John — community investment", 1,
+        "Health system community benefit: clinics, food access, basic needs — Tulsa",
+        "$15K – $1M+", "",
+        "EIN 73-0579286. 990 grants: $2.1M to Crossover Community Impact (incl. start-up of a 2nd clinic site for Medicaid-funded care), $430K to Neighbors Along the Line (clinic, food pantry, basic needs). No open application — approach via community benefit / mission office.", "", ""],
+      ["Morningcrest Healthcare Foundation", 1,
+        "Tulsa healthcare philanthropy",
+        "$100K – $400K", "",
+        "EIN 04-3815973, ~$107M assets. $400K to Crossover: community center + FreshRx Food-as-Medicine expansion — our medical + food lanes exactly.", "", ""],
+      ["Mervin Bovaird Foundation", 1,
+        "General support for Tulsa community nonprofits",
+        "$10K – $20K", "",
+        "EIN 73-6102163, ~$46M assets. Funds ALL THREE studied peers (Crossover, Crosstown, Neighbors Along the Line) $20K general support each.", "", ""],
+      ["The Robinson Foundation", 1,
+        "Tulsa community support, scholarships",
+        "$25K typical", "https://www.robinsonfdn.org/",
+        "EIN 73-1014526. $100K to Crossover, $30K to Neighbors Along the Line.", "", ""],
+      ["Hille Family Charitable Foundation", 1,
+        "General operating for Tulsa nonprofits incl. early learning",
+        "$5K – $30K", "https://hillefoundation.org",
+        "EIN 73-1521975, ~$48M assets. $90K general operating to Crosstown Learning Center; also funds Neighbors Along the Line.", "", ""],
+      ["Broadhurst Foundation", 1,
+        "Early learning, education — Tulsa",
+        "to $100K", "",
+        "EIN 73-6061115. $100K to Crosstown for 'highest-quality early learning and care'.", "", ""],
+      ["Sharna & Irvin Frank Foundation", 1,
+        "Operations support — Tulsa health & human services",
+        "$10K – $12.5K/yr", "https://www.sifrankfoundation.org",
+        "EIN 73-1503704. Repeat gen-ops: $50K to Neighbors Along the Line, $30K to Crosstown.", "", ""],
+      ["Flint Family Foundation", 1,
+        "General operations — Tulsa",
+        "$12.5K – $25K", "https://www.flintfamilyfoundation.org",
+        "EIN 30-0582777, ~$29M assets. $25K operations to both Crosstown and Neighbors Along the Line.", "", ""],
+      ["Steadfast Foundation (Tulsa)", 1,
+        "General fund support — Tulsa",
+        "~$39K avg", "",
+        "EIN 85-2579258. $156K general-fund grants to Crossover through FY2025 — actively giving now.", "", ""],
+      ["Charles & Marion Weber Foundation", 1,
+        "Tulsa charitable support", "$16K avg", "",
+        "EIN 20-7338204. $65K to Neighbors Along the Line.", "", ""],
+      ["Welch Family Foundation", 1,
+        "Services for those in need — Tulsa", "$10K avg", "",
+        "EIN 73-1502461. $31K to Neighbors Along the Line.", "", ""],
+      ["Stuart Family Foundation (Tulsa)", 1,
+        "General fund — Tulsa", "$10K typical", "",
+        "EIN 23-7052187. Funds both Crosstown and Neighbors Along the Line.", "", ""],
+      ["Ralph & Frances McGill Foundation", 1,
+        "Program services — Tulsa (administered by Trust Company of Oklahoma)",
+        "$5K – $6K", "https://www.trustok.com/nonprofit-foundations/",
+        "EIN 73-1590898. Funds both Crosstown and Neighbors Along the Line. Trust Co. of OK portal lists guidelines for several client foundations.", "", ""],
+      ["The Goatcher Foundation", 2,
+        "General operations — Tulsa", "$7K avg", "https://www.goatcherfoundation.org/",
+        "EIN 20-0116479. $21K to Neighbors Along the Line.", "", ""],
+      ["Charles W. Harris Foundation", 2,
+        "Community programs — Tulsa", "$6K avg", "",
+        "EIN 26-4536771. $17.5K to Neighbors Along the Line.", "", ""],
+      ["CAP Tulsa (Community Action Project of Tulsa County)", 1,
+        "PARTNERSHIP target — the region's early-childhood hub, re-grants ECE funding",
+        "varies", "https://www.captulsa.org",
+        "EIN 73-1019247. Re-granted $661K to Crosstown and $26M to Tulsa Educare for early childhood programs. Pursue partnership/subaward, not an application.",
+        "Karen Tilkin (Executive Director)", "karen.tilkin@captulsa.org"],
+      ["Charles & Lynn Schusterman Family Philanthropies", 2,
+        "Education, young people, Tulsa civic — invite-leaning",
+        "varies", "https://www.schusterman.org",
+        "EIN 73-1312965, ~$3B. Major Tulsa funder; mostly invited — build the relationship first.", "", "scardin@schusterman.org"],
+      ["Maxine & Jack Zarrow Family Foundation", 2,
+        "Health, basic needs, social services — Tulsa metro",
+        "varies", "https://zarrow.org/",
+        "EIN 31-6640903. Separate Zarrow entity, same application portal and grants contact as Anne & Henry Zarrow.",
+        "Laura Blais (Grants Manager)", "grants@zarrow.org"],
+      ["Jess L. & Miriam B. Stevens Foundation", 2,
+        "Education, medical, welfare of needy persons — Tulsa", "varies", "",
+        "EIN 73-1557364. From Candid early-learning grantmakers export; small grant to Crosstown on record.", "", ""],
+      ["Robert S. & Helen Grey Trippet Foundation", 2,
+        "Tulsa private grantmaking", "varies", "",
+        "EIN 73-1390841. From Candid early-learning grantmakers export.", "", ""],
+      ["Wegener Foundation", 2,
+        "Social services, at-risk children and youth — OKC/statewide", "varies", "",
+        "EIN 73-6095407. From Candid export: gives primarily to organizations serving at-risk children and youth.", "", ""],
+      ["Mike & Susan Burkhart Foundation", 2,
+        "Child welfare — Tulsa", "varies", "",
+        "EIN 20-2372810. From Candid early-learning grantmakers export.", "", ""],
+      ["Clyde & Anita Becker Foundation", 2,
+        "Education, health, human services — Tulsa", "varies", "",
+        "EIN 20-5106028. From Candid early-learning grantmakers export.", "", ""],
+      ["Fulton & Susie Collins Foundation", 2,
+        "Tulsa private grantmaking", "varies", "",
+        "EIN 73-1273053. From Candid export.", "", ""],
+      ["J & S Boyce Family Foundation", 2,
+        "Broken Arrow / Tulsa County grantmaking", "varies", "",
+        "EIN 87-2387496. From Candid early-learning grantmakers export.", "", ""],
+      ["Harold A. & Edna L. White Foundation", 2,
+        "Tulsa family foundation", "~$213K/yr total giving", "",
+        "EIN 73-1582836. Local scope per IRS records.", "", ""],
+      ["Joseph & Virginia Dibert Foundation Trust", 2,
+        "Tulsa family foundation", "~$200K/yr total giving", "",
+        "EIN 20-7230041.", "", ""],
+      ["SendMe Foundation", 2,
+        "Porter, OK (Wagoner County) regional giving", "~$129K/yr total giving", "",
+        "EIN 26-2355547.", "", ""],
+      ["Charles & Peggy Stephenson Family Foundation", 2,
+        "Child welfare, education — Tulsa", "varies", "",
+        "EIN 73-6301100. From Candid early-learning grantmakers export.", "", ""],
+    ];
+    for (const [name, tier, focus, award, website, notes, cname, cemail] of newFunders) {
+      try {
+        if (!funderKeys.has(nameKey(name))) {
+          await b.run(
+            `INSERT INTO funders (name, type, tier, focus, award_range, website, notes, contact_name, contact_email) VALUES (?, 'foundation', ?, ?, ?, ?, ?, ?, ?)`,
+            [name, tier, focus, award, website, notes, cname, cemail]
+          );
+        }
+      } catch { /* one bad row never blocks startup */ }
+    }
+
+    // Fill contacts on existing funders ONLY where none is recorded.
+    const contactFills: [string, string, string][] = [
+      ["Anne & Henry Zarrow Foundation", "Laura Blais (Grants Manager)", "grants@zarrow.org"],
+      ["Tulsa Community Foundation", "Phil Lakin Jr. (CEO)", "info@tulsacf.org"],
+      ["Tulsa Area United Way", "", "tauw@tulsaunitedway.org"],
+      ["Oklahoma City Community Foundation", "", "info@occf.org"],
+    ];
+    for (const [fname, cname, cemail] of contactFills) {
+      try {
+        await b.run(
+          `UPDATE funders SET contact_name = CASE WHEN contact_name IS NULL OR contact_name='' THEN ? ELSE contact_name END,
+                              contact_email = CASE WHEN contact_email IS NULL OR contact_email='' THEN ? ELSE contact_email END
+           WHERE name = ?`,
+          [cname, cemail, fname]
+        );
+      } catch { /* ignore */ }
+    }
+
+    const newWatch: [string, string][] = [
+      ["Hille Family Charitable Foundation", "https://hillefoundation.org"],
+      ["Flint Family Foundation", "https://www.flintfamilyfoundation.org"],
+      ["Robinson Foundation", "https://www.robinsonfdn.org/"],
+      ["Sharna & Irvin Frank Foundation", "https://www.sifrankfoundation.org"],
+      ["Goatcher Foundation", "https://www.goatcherfoundation.org/"],
+      ["Delta Dental of Oklahoma Foundation", "https://www.ddokfoundation.org"],
+      ["Trust Company of Oklahoma — client foundations", "https://www.trustok.com/nonprofit-foundations/"],
+    ];
+    for (const [name, url] of newWatch) {
+      try {
+        await b.run(`INSERT OR IGNORE INTO scout_sources (name, url, kind) VALUES (?, ?, 'foundation')`, [name, url]);
+      } catch { /* ignore */ }
+    }
+    await b.run(`INSERT INTO settings (key, value) VALUES ('seed_v11_candid_library', 'done')`);
+  }
 }
 
 async function addKeywords(b: Backend, keywords: string[]) {
